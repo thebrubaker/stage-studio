@@ -1,0 +1,20 @@
+{
+  "name": "clickzoom",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "clickzoom": "./src/cli.ts"
+  },
+  "scripts": {
+    "build:clicks": "swiftc -O cmd/clicks/main.swift -o cmd/clicks/clicks",
+    "build:windows": "swiftc -O cmd/windows/main.swift -o cmd/windows/windows",
+    "build:recorder": "swiftc -O cmd/recorder/main.swift -o cmd/recorder/recorder",
+    "build": "pnpm run build:clicks && pnpm run build:windows && pnpm run build:recorder",
+    "cli": "bun run src/cli.ts",
+    "test": "bun run test/run-tests.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

@@ -1,0 +1,569 @@
+// clickzoom recorder — captures a single macOS window with ScreenCaptureKit,
+// composites it onto a styled background via Core Image, and writes a finished
+// H.264 MP4 with optional mic audio.
+//
+// Why this owns the whole pipeline (capture → compose → encode): Remotion's
+// alpha pipeline drops source transparency when re-encoding to H264, which
+// produced sharp black corners around the rounded window content. Compositing
+// natively in Swift via Core Image (Metal-backed CIContext) preserves the
+// window's actual rounded-rect alpha as the camera-shaped mask, and outputs
+// a normal opaque MP4 ready to share.
+//
+// Output: MP4 (H.264 video + AAC audio).
+//
+// Usage: recorder <windowID> <durationSeconds> <outputPath>
+//
+// Env:
+//   RECORDER_BG=<preset>     — background preset (default: indigo)
+//   RECORDER_NO_AUDIO=1      — skip mic capture
+//   RECORDER_SOLID_RED=1     — probe mode: solid red bg, no shadow/padding,
+//                              used to verify alpha-through-compose end-to-end
+//
+// Requires Screen Recording AND Microphone permission on the parent terminal app.
+
+import AVFoundation
+import CoreGraphics
+import CoreImage
+import CoreMedia
+import CoreVideo
+import Foundation
+import Metal
+import ScreenCaptureKit
+import SwiftUI
+
+// MARK: - Args
+
+let args = CommandLine.arguments
+guard args.count >= 4,
+      let windowIDNum = UInt32(args[1]),
+      let durationS = Double(args[2]) else {
+    FileHandle.standardError.write(Data("usage: recorder <windowID> <durationSeconds> <outputPath>\n".utf8))
+    exit(64)
+}
+let outputPath = args[3]
+let windowID = CGWindowID(windowIDNum)
+let captureAudio = ProcessInfo.processInfo.environment["RECORDER_NO_AUDIO"] != "1"
+let probeSolidRed = ProcessInfo.processInfo.environment["RECORDER_SOLID_RED"] == "1"
+// Optional file path to use as the canvas background image. JPEG/PNG/HEIC all
+// supported. Center-cropped + scaled to output dims. If unset (or file missing),
+// falls back to the procedural mesh gradient.
+let backgroundImagePath = ProcessInfo.processInfo.environment["RECORDER_BG_IMAGE"]
+
+// 1920x1080 final output. Hardcoded for now — backgrounds and presets land later.
+let OUTPUT_W = 1920
+let OUTPUT_H = 1080
+
+/// When `durationS == 0` we run open-ended until SIGTERM/SIGINT. This safety
+/// cap stops a forgotten recording from filling the disk if the user walks
+/// away. 5 minutes is generous for a single demo clip; bump if it turns out to
+/// matter.
+let OPEN_ENDED_MAX_DURATION_S: Double = 300
+
+// MARK: - Composer
+
+/// Loads a JPEG/PNG/HEIC from disk and scales/center-crops it to the output
+/// canvas dimensions. Returns nil if the file is missing or undecodable.
+func loadBackgroundImage(path: String, width: Int, height: Int) -> CIImage? {
+    let url = URL(fileURLWithPath: path)
+    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+          let cg = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+        FileHandle.standardError.write(Data("recorder: failed to load bg image \(path)\n".utf8))
+        return nil
+    }
+    let srcCI = CIImage(cgImage: cg)
+    let srcW = CGFloat(cg.width)
+    let srcH = CGFloat(cg.height)
+    let outW = CGFloat(width)
+    let outH = CGFloat(height)
+
+    // Scale-to-fill: scale by the LARGER of the two ratios so the smaller
+    // dimension of the source covers the canvas. Then center-crop the excess.
+    let scale = max(outW / srcW, outH / srcH)
+    let scaled = srcCI.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+    let scaledW = srcW * scale
+    let scaledH = srcH * scale
+    // Center the scaled image, then crop to canvas. CIImage origin is bottom-left.
+    let tx = (outW - scaledW) / 2
+    let ty = (outH - scaledH) / 2
+    let positioned = scaled.transformed(by: CGAffineTransform(translationX: tx, y: ty))
+    return positioned.cropped(to: CGRect(x: 0, y: 0, width: outW, height: outH))
+}
+
+/// Builds the styled background CIImage that frames every clickzoom recording.
+///
+/// Uses SwiftUI's `MeshGradient` (Sequoia+) for a tasteful warm-tone field
+/// that recedes behind the recorded window. A 3x3 mesh gives enough control
+/// to get richness without busy-ness: warm peach top, amber midline,
+/// deep mocha bottom, with subtle hue variation midfield.
+///
+/// Rendered once at recorder init and cached as a CIImage. Per-frame
+/// composition just references this image — no recomputation in the hot path.
+@MainActor
+func makeMeshGradientBackground(width: Int, height: Int) -> CIImage {
+    // Warm "Tahoe sunset" palette. Points are normalized [0..1] in the grid.
+    // Colors flow from peach top-left → amber midline → deep warm mocha
+    // bottom-right, with subtle terracotta and rust nodes interpolating.
+    let view = MeshGradient(
+        width: 3,
+        height: 3,
+        points: [
+            [0.00, 0.00], [0.50, 0.00], [1.00, 0.00],
+            [0.00, 0.50], [0.55, 0.45], [1.00, 0.50],
+            [0.00, 1.00], [0.50, 1.00], [1.00, 1.00],
+        ],
+        colors: [
+            Color(red: 0.99, green: 0.80, blue: 0.62),  // top-left:    soft peach
+            Color(red: 0.96, green: 0.65, blue: 0.40),  // top-center:  warm amber
+            Color(red: 0.85, green: 0.45, blue: 0.32),  // top-right:   terracotta
+            Color(red: 0.78, green: 0.42, blue: 0.32),  // mid-left:    warm rust
+            Color(red: 0.55, green: 0.28, blue: 0.25),  // center:      deep terracotta
+            Color(red: 0.45, green: 0.22, blue: 0.22),  // mid-right:   warm umber
+            Color(red: 0.32, green: 0.16, blue: 0.18),  // bot-left:    deep warm
+            Color(red: 0.22, green: 0.11, blue: 0.13),  // bot-center:  mocha
+            Color(red: 0.12, green: 0.07, blue: 0.09),  // bot-right:   near-black
+        ]
+    )
+    .frame(width: CGFloat(width), height: CGFloat(height))
+
+    let renderer = ImageRenderer(content: view)
+    renderer.scale = 1.0  // canvas is already at output resolution
+    guard let cgImage = renderer.cgImage else {
+        // Fallback: solid warm color if SwiftUI rendering somehow fails.
+        FileHandle.standardError.write(Data("recorder: MeshGradient render failed, falling back to flat color\n".utf8))
+        return CIImage(color: CIColor(red: 0.55, green: 0.28, blue: 0.25))
+            .cropped(to: CGRect(x: 0, y: 0, width: width, height: height))
+    }
+    return CIImage(cgImage: cgImage)
+}
+
+/// Builds a soft drop shadow from the window's alpha mask. Steps:
+/// 1. Keep only the alpha channel as a gray image
+/// 2. Tint to black with target shadow opacity
+/// 3. Blur for softness
+/// 4. Offset down/right
+func makeShadow(for window: CIImage, blur: Double, offsetX: Double, offsetY: Double, opacity: Double) -> CIImage {
+    // CIMaskToAlpha turns a grayscale into an alpha-only image. To get just the
+    // window's alpha as a tinted shape, multiply the original by a solid black,
+    // then blur, then move.
+    let blackTint = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: CGFloat(opacity)))
+        .cropped(to: window.extent)
+    // sourceIn: shadow = blackTint where window has alpha > 0
+    let masked = blackTint.applyingFilter("CISourceInCompositing", parameters: [
+        kCIInputBackgroundImageKey: window,
+    ])
+    let blurred = masked.applyingFilter("CIGaussianBlur", parameters: [
+        kCIInputRadiusKey: blur,
+    ])
+    return blurred.transformed(by: CGAffineTransform(translationX: CGFloat(offsetX), y: CGFloat(-offsetY)))
+}
+
+/// Computes the (scale, translation) to aspect-fit a srcW x srcH source into
+/// an inner rect of [padX, padY] padding inside an outputW x outputH canvas.
+/// Returns the affine transform to apply to the source CIImage.
+func fitTransform(srcW: Int, srcH: Int, outputW: Int, outputH: Int, padRatio: CGFloat) -> CGAffineTransform {
+    let padX = CGFloat(outputW) * padRatio
+    let padY = CGFloat(outputH) * padRatio
+    let innerW = CGFloat(outputW) - 2 * padX
+    let innerH = CGFloat(outputH) - 2 * padY
+    let srcAspect = CGFloat(srcW) / CGFloat(srcH)
+    let innerAspect = innerW / innerH
+
+    let dispW: CGFloat, dispH: CGFloat
+    if srcAspect > innerAspect {
+        dispW = innerW
+        dispH = innerW / srcAspect
+    } else {
+        dispH = innerH
+        dispW = innerH * srcAspect
+    }
+    let scale = dispW / CGFloat(srcW)
+    let tx = (CGFloat(outputW) - dispW) / 2
+    let ty = (CGFloat(outputH) - dispH) / 2
+    return CGAffineTransform(translationX: tx, y: ty).scaledBy(x: scale, y: scale)
+}
+
+/// Composites a window-shaped CIImage (with alpha) onto a styled background.
+/// Renders into reusable CVPixelBuffers from a pool — minimizes per-frame allocs.
+final class Composer {
+    let ciContext: CIContext
+    let outputSize: CGSize
+    let pixelBufferPool: CVPixelBufferPool
+    let background: CIImage
+    let solidProbe: Bool
+    let padRatio: CGFloat = 0.08
+    // Tasteful "macOS window on desktop" shadow — visible but not heavy.
+    let shadowBlur: Double = 55
+    let shadowOffsetX: Double = 0
+    let shadowOffsetY: Double = 35
+    let shadowOpacity: Double = 0.7
+
+    init(outputW: Int, outputH: Int, solidProbe: Bool, background: CIImage) throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw NSError(domain: "composer", code: 1, userInfo: [NSLocalizedDescriptionKey: "no Metal device"])
+        }
+        self.ciContext = CIContext(mtlDevice: device, options: [
+            .workingColorSpace: CGColorSpaceCreateDeviceRGB(),
+            .outputColorSpace: CGColorSpaceCreateDeviceRGB(),
+        ])
+        self.outputSize = CGSize(width: outputW, height: outputH)
+        self.solidProbe = solidProbe
+
+        let attrs: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey as String: outputW,
+            kCVPixelBufferHeightKey as String: outputH,
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:],
+            kCVPixelBufferMetalCompatibilityKey as String: true,
+        ]
+        var pool: CVPixelBufferPool?
+        let poolAttrs: [String: Any] = [
+            kCVPixelBufferPoolMinimumBufferCountKey as String: 4,
+        ]
+        CVPixelBufferPoolCreate(kCFAllocatorDefault, poolAttrs as CFDictionary, attrs as CFDictionary, &pool)
+        guard let pool = pool else {
+            throw NSError(domain: "composer", code: 2, userInfo: [NSLocalizedDescriptionKey: "pool creation failed"])
+        }
+        self.pixelBufferPool = pool
+
+        self.background = background
+    }
+
+    func compose(_ source: CMSampleBuffer) -> CMSampleBuffer? {
+        guard let srcBuffer = CMSampleBufferGetImageBuffer(source) else { return nil }
+        let srcW = CVPixelBufferGetWidth(srcBuffer)
+        let srcH = CVPixelBufferGetHeight(srcBuffer)
+        let sourceCI = CIImage(cvPixelBuffer: srcBuffer)
+
+        let composed: CIImage
+        if solidProbe {
+            let probeBg = CIImage(color: CIColor(red: 1, green: 0, blue: 0))
+                .cropped(to: CGRect(x: 0, y: 0, width: srcW, height: srcH))
+            composed = sourceCI.composited(over: probeBg)
+        } else {
+            // Scale + position the window inside the canvas with padding.
+            let transform = fitTransform(srcW: srcW, srcH: srcH, outputW: Int(outputSize.width), outputH: Int(outputSize.height), padRatio: padRatio)
+            let positionedWindow = sourceCI.transformed(by: transform)
+            // Build drop shadow from the positioned (and thus scaled) window.
+            let shadow = makeShadow(for: positionedWindow, blur: shadowBlur, offsetX: shadowOffsetX, offsetY: shadowOffsetY, opacity: shadowOpacity)
+            // Layer order: bg → shadow → window
+            let shadowOverBg = shadow.composited(over: background)
+            composed = positionedWindow.composited(over: shadowOverBg)
+        }
+
+        var outBuf: CVPixelBuffer?
+        CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pixelBufferPool, &outBuf)
+        guard let outBuf = outBuf else { return nil }
+        ciContext.render(composed, to: outBuf)
+
+        var formatDesc: CMVideoFormatDescription?
+        CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault,
+                                                     imageBuffer: outBuf,
+                                                     formatDescriptionOut: &formatDesc)
+        guard let formatDesc = formatDesc else { return nil }
+
+        var timing = CMSampleTimingInfo()
+        CMSampleBufferGetSampleTimingInfo(source, at: 0, timingInfoOut: &timing)
+
+        var newBuf: CMSampleBuffer?
+        CMSampleBufferCreateForImageBuffer(allocator: kCFAllocatorDefault,
+                                           imageBuffer: outBuf,
+                                           dataReady: true,
+                                           makeDataReadyCallback: nil,
+                                           refcon: nil,
+                                           formatDescription: formatDesc,
+                                           sampleTiming: &timing,
+                                           sampleBufferOut: &newBuf)
+        return newBuf
+    }
+}
+
+// MARK: - Recorder
+
+final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
+    let writer: AVAssetWriter
+    let videoInput: AVAssetWriterInput
+    let audioInput: AVAssetWriterInput?
+    let composer: Composer
+    var sessionStarted = false
+    let writerLock = NSLock()
+
+    init(outputURL: URL, outputW: Int, outputH: Int, withAudio: Bool, composer: Composer) throws {
+        try? FileManager.default.removeItem(at: outputURL)
+        self.writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
+        self.composer = composer
+
+        let videoSettings: [String: Any] = [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: outputW,
+            AVVideoHeightKey: outputH,
+            AVVideoCompressionPropertiesKey: [
+                AVVideoAverageBitRateKey: 12_000_000,
+                AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
+            ],
+        ]
+        self.videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
+        self.videoInput.expectsMediaDataInRealTime = true
+        self.writer.add(videoInput)
+
+        if withAudio {
+            let audioSettings: [String: Any] = [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVNumberOfChannelsKey: 1,
+                AVSampleRateKey: 44100,
+                AVEncoderBitRateKey: 128_000,
+            ]
+            let ai = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
+            ai.expectsMediaDataInRealTime = true
+            self.audioInput = ai
+            self.writer.add(ai)
+        } else {
+            self.audioInput = nil
+        }
+        super.init()
+    }
+
+    private func ensureSession(at pts: CMTime) -> Bool {
+        if sessionStarted { return false }
+        if !writer.startWriting() {
+            FileHandle.standardError.write(Data("startWriting failed: \(writer.error?.localizedDescription ?? "?")\n".utf8))
+            return false
+        }
+        writer.startSession(atSourceTime: pts)
+        sessionStarted = true
+        return true
+    }
+
+    // MARK: SCStreamOutput
+
+    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+        guard type == .screen else { return }
+        guard sampleBuffer.isValid else { return }
+
+        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
+              let first = attachments.first,
+              let rawStatus = first[.status] as? Int,
+              let status = SCFrameStatus(rawValue: rawStatus),
+              status == .complete else {
+            return
+        }
+
+        guard CMSampleBufferGetImageBuffer(sampleBuffer) != nil else { return }
+        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+
+        // Compose: source (alpha-shaped window) on background → opaque output buffer.
+        guard let composed = composer.compose(sampleBuffer) else { return }
+
+        writerLock.lock()
+        _ = ensureSession(at: pts)
+        writerLock.unlock()
+
+        if videoInput.isReadyForMoreMediaData {
+            if !videoInput.append(composed) {
+                FileHandle.standardError.write(Data("video append failed: \(writer.error?.localizedDescription ?? "?")\n".utf8))
+            }
+        }
+    }
+
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        FileHandle.standardError.write(Data("stream stopped with error: \(error.localizedDescription)\n".utf8))
+    }
+
+    // MARK: AVCaptureAudioDataOutputSampleBufferDelegate
+
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        guard let audioInput = audioInput else { return }
+        guard sampleBuffer.isValid else { return }
+
+        writerLock.lock()
+        let started = sessionStarted
+        writerLock.unlock()
+        if !started { return }
+
+        if audioInput.isReadyForMoreMediaData {
+            if !audioInput.append(sampleBuffer) {
+                FileHandle.standardError.write(Data("audio append failed: \(writer.error?.localizedDescription ?? "?")\n".utf8))
+            }
+        }
+    }
+}
+
+// MARK: - Capture flow
+
+func setupAudioCapture(recorder: Recorder) throws -> AVCaptureSession {
+    let session = AVCaptureSession()
+    guard let device = AVCaptureDevice.default(for: .audio) else {
+        throw NSError(domain: "recorder", code: 10, userInfo: [
+            NSLocalizedDescriptionKey: "no default audio capture device",
+        ])
+    }
+    let input = try AVCaptureDeviceInput(device: device)
+    guard session.canAddInput(input) else {
+        throw NSError(domain: "recorder", code: 11, userInfo: [NSLocalizedDescriptionKey: "can't add audio input"])
+    }
+    session.addInput(input)
+
+    let output = AVCaptureAudioDataOutput()
+    let queue = DispatchQueue(label: "clickzoom.recorder.audio", qos: .userInteractive)
+    output.setSampleBufferDelegate(recorder, queue: queue)
+    guard session.canAddOutput(output) else {
+        throw NSError(domain: "recorder", code: 12, userInfo: [NSLocalizedDescriptionKey: "can't add audio output"])
+    }
+    session.addOutput(output)
+    return session
+}
+
+func run() async throws {
+    let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+    guard let target = content.windows.first(where: { $0.windowID == windowID }) else {
+        let available = content.windows.map { "\($0.windowID)=\($0.owningApplication?.applicationName ?? "?"):\($0.title ?? "")" }.joined(separator: "\n")
+        throw NSError(domain: "recorder", code: 2, userInfo: [
+            NSLocalizedDescriptionKey: "window \(windowID) not found. Available:\n\(available)",
+        ])
+    }
+
+    FileHandle.standardError.write(Data("recorder: target \(windowID) — \(target.owningApplication?.applicationName ?? "?") — \(target.title ?? "")\n".utf8))
+
+    let backingScale = NSScreen.main?.backingScaleFactor ?? 2.0
+    let pxW = Int(target.frame.width * backingScale)
+    let pxH = Int(target.frame.height * backingScale)
+
+    // Output dims:
+    //   probe mode → match source so alpha-corner pixels are at a predictable
+    //   location for byte-sampling discriminating test
+    //   real mode → fixed 1920x1080
+    let outW = probeSolidRed ? pxW : OUTPUT_W
+    let outH = probeSolidRed ? pxH : OUTPUT_H
+
+    let filter = SCContentFilter(desktopIndependentWindow: target)
+    let config = SCStreamConfiguration()
+    config.width = pxW
+    config.height = pxH
+    config.pixelFormat = kCVPixelFormatType_32BGRA
+    config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+    config.queueDepth = 8
+    config.showsCursor = true
+    config.scalesToFit = true
+    // SCStreamConfiguration.backgroundColor defaults to clear — alpha-correct.
+
+    // Build the background CIImage. Priority:
+    //   1. RECORDER_BG_IMAGE env var → load JPEG/PNG/HEIC, scale-to-fill
+    //   2. Probe mode → solid red
+    //   3. Default → SwiftUI mesh gradient (requires MainActor hop)
+    let backgroundImage: CIImage
+    if probeSolidRed {
+        backgroundImage = CIImage(color: CIColor(red: 1, green: 0, blue: 0))
+            .cropped(to: CGRect(x: 0, y: 0, width: outW, height: outH))
+    } else if let bgPath = backgroundImagePath, let loaded = loadBackgroundImage(path: bgPath, width: outW, height: outH) {
+        FileHandle.standardError.write(Data("recorder: bg image \(bgPath)\n".utf8))
+        backgroundImage = loaded
+    } else {
+        if backgroundImagePath != nil {
+            FileHandle.standardError.write(Data("recorder: bg image failed to load, using mesh gradient\n".utf8))
+        }
+        backgroundImage = await MainActor.run {
+            makeMeshGradientBackground(width: outW, height: outH)
+        }
+    }
+    let composer = try Composer(outputW: outW, outputH: outH, solidProbe: probeSolidRed, background: backgroundImage)
+
+    let outputURL = URL(fileURLWithPath: outputPath)
+    let recorder = try Recorder(outputURL: outputURL, outputW: outW, outputH: outH, withAudio: captureAudio, composer: composer)
+
+    let stream = SCStream(filter: filter, configuration: config, delegate: recorder)
+    let videoQueue = DispatchQueue(label: "clickzoom.recorder.video", qos: .userInteractive)
+    try stream.addStreamOutput(recorder, type: .screen, sampleHandlerQueue: videoQueue)
+
+    var audioSession: AVCaptureSession? = nil
+    if captureAudio {
+        do { audioSession = try setupAudioCapture(recorder: recorder) }
+        catch {
+            FileHandle.standardError.write(Data("recorder: audio setup failed, recording silently: \(error.localizedDescription)\n".utf8))
+        }
+    }
+
+    // Stop trigger: either fixed duration elapses, signal fires (SIGTERM/SIGINT),
+    // or the open-ended safety cap kicks in. Whichever happens first.
+    //
+    // Using a DispatchSemaphore signaled from any of three sources, then
+    // bridged to async via a continuation. This blocks the run() task until
+    // stop is requested.
+    let stopSemaphore = DispatchSemaphore(value: 0)
+    let stopLock = NSLock()
+    var stopFired = false
+    let signalStop: (String) -> Void = { reason in
+        stopLock.lock(); defer { stopLock.unlock() }
+        if stopFired { return }
+        stopFired = true
+        FileHandle.standardError.write(Data("recorder: stop requested (\(reason))\n".utf8))
+        stopSemaphore.signal()
+    }
+
+    // SIGTERM: clean stop, what Claude sends via `kill <pid>`. Default action
+    // is process termination — we override with SIG_IGN and capture via
+    // DispatchSource so we get a chance to finalize the writer.
+    signal(SIGTERM, SIG_IGN)
+    let sigtermSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .global())
+    sigtermSource.setEventHandler { signalStop("SIGTERM") }
+    sigtermSource.resume()
+
+    // SIGINT: same as SIGTERM, lets `kill -INT` or Ctrl-C work cleanly too.
+    signal(SIGINT, SIG_IGN)
+    let sigintSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
+    sigintSource.setEventHandler { signalStop("SIGINT") }
+    sigintSource.resume()
+
+    // Duration timer.
+    let effectiveDuration: Double = durationS == 0 ? OPEN_ENDED_MAX_DURATION_S : durationS
+    DispatchQueue.global().asyncAfter(deadline: .now() + effectiveDuration) {
+        let reason = durationS == 0 ? "open-ended safety cap (\(Int(OPEN_ENDED_MAX_DURATION_S))s)" : "duration elapsed"
+        signalStop(reason)
+    }
+
+    FileHandle.standardError.write(Data("recorder: starting capture \(pxW)x\(pxH) → compose \(outW)x\(outH)\(probeSolidRed ? " [SOLID-RED PROBE]" : "")\(captureAudio ? " + mic" : " (no audio)") duration=\(durationS == 0 ? "open-ended" : "\(durationS)s")\n".utf8))
+    audioSession?.startRunning()
+    try await stream.startCapture()
+
+    FileHandle.standardError.write(Data("recorder: ready\n".utf8))
+
+    // Block until stop is requested (signal or timer).
+    await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+        DispatchQueue.global().async {
+            stopSemaphore.wait()
+            cont.resume()
+        }
+    }
+
+    sigtermSource.cancel()
+    sigintSource.cancel()
+
+    FileHandle.standardError.write(Data("recorder: stopping stream...\n".utf8))
+    try await stream.stopCapture()
+    audioSession?.stopRunning()
+
+    recorder.videoInput.markAsFinished()
+    recorder.audioInput?.markAsFinished()
+    await recorder.writer.finishWriting()
+
+    if recorder.writer.status != .completed {
+        throw NSError(domain: "recorder", code: 3, userInfo: [
+            NSLocalizedDescriptionKey: "writer status \(recorder.writer.status.rawValue): \(recorder.writer.error?.localizedDescription ?? "?")",
+        ])
+    }
+    FileHandle.standardError.write(Data("recorder: wrote \(outputPath)\n".utf8))
+}
+
+// MARK: - Entry
+
+// Use RunLoop.main.run() instead of DispatchSemaphore so the main thread can
+// service @MainActor hops (needed for SwiftUI MeshGradient rendering). The
+// Task calls exit() directly when done to break out of the runloop.
+Task {
+    do {
+        try await run()
+        exit(0)
+    } catch {
+        FileHandle.standardError.write(Data("recorder error: \(error)\n".utf8))
+        exit(1)
+    }
+}
+RunLoop.main.run()

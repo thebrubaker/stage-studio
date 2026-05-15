@@ -1,0 +1,9 @@
+node_modules/
+.probes/
+out/
+*.log
+.DS_Store
+
+# Test recordings staged into render/public for the v1 Remotion-based renderer
+# (backlogged). Regenerated per run by the cli.
+render/public/source.*
