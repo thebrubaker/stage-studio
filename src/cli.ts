@@ -46,6 +46,10 @@ type Args = {
   /** Specific CGWindowID to record. Preferred over --window when Claude pipes
    *  an exact id from `cmd/windows list`. Skips the fuzzy-match path entirely. */
   windowId?: number;
+  /** Subcommand short-circuit: print all on-screen windows as JSON and exit.
+   *  Intended for the /stage skill — gives it a window picker without depending
+   *  on the bundled cmd/windows binary path. */
+  listWindows: boolean;
 };
 
 function parseArgs(argv: string[]): Args {
@@ -54,7 +58,15 @@ function parseArgs(argv: string[]): Args {
     output: "out.mp4",
     workDir: resolve(REPO_ROOT, "out"),
     skipRecord: false,
+    listWindows: false,
   };
+  // Accept `stage-studio list-windows` as a bare subcommand (no leading dashes).
+  // Strictly positional: it has to be the first arg. Anything else falls through
+  // to the regular flag parser, including `--list-windows` for symmetry.
+  if (argv[0] === "list-windows" || argv[0] === "--list-windows") {
+    args.listWindows = true;
+    return args;
+  }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--duration" || a === "-t") args.duration = Number(argv[++i]);
@@ -66,7 +78,11 @@ function parseArgs(argv: string[]): Args {
     else if (a === "-h" || a === "--help") {
       console.log(`stage-studio — record a window + render polished MP4
 
-Usage: stage-studio [options]
+Usage:
+  stage-studio [options]              record (default)
+  stage-studio list-windows           print on-screen windows as JSON and exit
+
+Recording options:
   -t, --duration <s>    recording duration in seconds, or 0 for open-ended
                         (stops on SIGTERM; default 8). Open-ended recordings
                         cap at 5 minutes as a safety.
@@ -76,7 +92,7 @@ Usage: stage-studio [options]
   -w, --window <pat>    target window pattern (case-insensitive substring of
                         app+title; default: frontmost non-terminal window)
       --window-id <N>   target specific CGWindowID (numeric). Use this when
-                        you have an exact id from \`cmd/windows list\`.
+                        you have an exact id from \`stage-studio list-windows\`.
   -h, --help            this help
 
   When --duration 0 is used, the recorder PID is printed to stdout as:
@@ -315,6 +331,18 @@ async function record(args: Args, windowID: number, outputPath: string, workDir:
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+
+  if (args.listWindows) {
+    // Thin pass-through to the windows binary. Inherits stdio so callers get
+    // the raw JSON array on stdout and any errors on stderr.
+    if (!existsSync(WINDOWS_BIN)) {
+      console.error(`[stage-studio] windows binary missing at ${WINDOWS_BIN} — run \`pnpm run build:windows\``);
+      process.exit(1);
+    }
+    const proc = spawn(WINDOWS_BIN, ["list"], { stdio: "inherit" });
+    proc.on("close", (code) => process.exit(code ?? 1));
+    return;
+  }
 
   if (!existsSync(CLICKS_BIN)) {
     console.error(`[stage-studio] clicks binary missing at ${CLICKS_BIN} — run \`pnpm run build:clicks\``);
