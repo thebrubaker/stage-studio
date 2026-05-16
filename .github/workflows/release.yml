@@ -1,0 +1,100 @@
+name: Release
+
+# Triggered by pushing a semver tag — `git tag v0.1.0 && git push --tags`.
+# Builds the Swift binaries on a macOS Sequoia runner, packages them with the
+# Bun CLI + skill + default background, attaches the tarball to a GitHub
+# Release with auto-generated notes from commits since the previous tag.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # macos-15 = Sequoia, which has the Swift toolchain + SwiftUI MeshGradient
+    # the recorder uses. macos-latest currently still resolves to 14 (Sonoma)
+    # which doesn't have MeshGradient.
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install JS deps
+        run: bun install
+
+      - name: Build Swift binaries
+        run: |
+          # `pnpm run build` runs the three swiftc invocations sequentially.
+          # We use pnpm because that's the convention in package.json scripts
+          # (mirrors local dev). corepack ships pnpm with recent Node setups
+          # but bun doesn't include it — install explicitly.
+          npm install -g pnpm
+          pnpm run build
+
+      - name: Verify binaries
+        run: |
+          file cmd/clicks/clicks cmd/windows/windows cmd/recorder/recorder cmd/gradient-preview/preview
+          # Sanity: each binary should be a Mach-O arm64 executable.
+          for b in cmd/clicks/clicks cmd/windows/windows cmd/recorder/recorder; do
+            file "$b" | grep -q "Mach-O 64-bit executable arm64" || { echo "❌ $b is not arm64 Mach-O"; exit 1; }
+          done
+
+      - name: Package release tarball
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          ARCHIVE="stage-studio-${TAG}-arm64.tar.gz"
+
+          # Bundle just what a user needs to run stage-studio after extracting.
+          # Excludes: render/ (v1 backlog), test/, out/, node_modules/.
+          tar -czvf "$ARCHIVE" \
+            cmd/clicks/clicks \
+            cmd/windows/windows \
+            cmd/recorder/recorder \
+            cmd/gradient-preview/preview \
+            src/cli.ts \
+            package.json \
+            assets/big-sur-graphic.jpg \
+            .claude/skills/stage-studio/ \
+            README.md \
+            LICENSE
+
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          ls -la "$ARCHIVE"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ARCHIVE }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          body: |
+            Apple Silicon (arm64) macOS build.
+
+            ## Install
+
+            ```bash
+            curl -L -o stage-studio.tar.gz "https://github.com/thebrubaker/stage-studio/releases/download/${{ env.TAG }}/${{ env.ARCHIVE }}"
+            tar -xzf stage-studio.tar.gz
+            cd stage-studio* 2>/dev/null || true
+
+            # macOS will quarantine the unsigned binaries on first run. Strip:
+            xattr -d com.apple.quarantine cmd/*/clicks cmd/*/windows cmd/*/recorder 2>/dev/null || true
+
+            # Install Bun if you don't have it:
+            curl -fsSL https://bun.sh/install | bash
+
+            bun install
+            ```
+
+            Then follow the README for permission setup and usage.
