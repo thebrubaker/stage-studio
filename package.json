@@ -1,10 +1,10 @@
 {
-  "name": "stage",
+  "name": "stage-studio",
   "version": "0.0.1",
   "private": true,
   "type": "module",
   "bin": {
-    "stage": "./src/cli.ts"
+    "stage-studio": "./src/cli.ts"
   },
   "scripts": {
     "build:clicks": "swiftc -O cmd/clicks/main.swift -o cmd/clicks/clicks",

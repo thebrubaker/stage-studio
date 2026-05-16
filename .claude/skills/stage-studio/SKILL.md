@@ -1,5 +1,5 @@
 ---
-name: stage
+name: stage-studio
 description: Record a polished MP4 of a single macOS window — gradient background, drop shadow, mic audio — driven from a Claude chat. Use when Joel says things like "let's record a video of this", "make a clip", "demo this in a recording".
 ---
 
@@ -24,7 +24,7 @@ Or you proactively suggest it when something demoable just landed.
 Run:
 
 ```bash
-~/Code/stage/cmd/windows/windows list
+~/Code/stage-studio/cmd/windows/windows list
 ```
 
 Returns JSON array of all on-screen windows. Each entry has `windowId`, `app`, `title`, `bounds`.
@@ -39,19 +39,19 @@ Options:
   - Linear — DIG-228
   - Chrome — onbook
   - Slack — #d-dev
-  - Cursor — stage
+  - Cursor — stage-studio
 ```
 
 Remember the chosen `windowId` for the next step.
 
 ### 2. Pick an output path
 
-Default location: `~/Code/stage/out/<slug>-<YYYYMMDD-HHMMSS>.mp4` where `<slug>` is a short description of what's being recorded. Don't ask Joel about the path — he doesn't care, and a sensible default lets the flow stay conversational. He'll tell you if he wants it somewhere specific.
+Default location: `~/Code/stage-studio/out/<slug>-<YYYYMMDD-HHMMSS>.mp4` where `<slug>` is a short description of what's being recorded. Don't ask Joel about the path — he doesn't care, and a sensible default lets the flow stay conversational. He'll tell you if he wants it somewhere specific.
 
 ### 3. Start the recording (background, open-ended)
 
 ```bash
-cd ~/Code/stage && bun run src/cli.ts \
+cd ~/Code/stage-studio && bun run src/cli.ts \
   --duration 0 \
   --window-id <CGWindowID> \
   --output <output-path>
@@ -62,7 +62,7 @@ cd ~/Code/stage && bun run src/cli.ts \
 **Capture the recorder PID** by reading the task output file. The CLI prints a line like:
 
 ```
-[stage] recorder PID: 12345
+[stage-studio] recorder PID: 12345
 ```
 
 That number is what you'll SIGTERM later. Hold onto it in conversation context.
@@ -113,6 +113,6 @@ If clicks/cursor data missing (not critical for v3 output but captured for futur
 - `cmd/windows/windows` — Swift binary, modes: `list`, `frontmost`, `find <pattern>`. JSON to stdout.
 - `cmd/recorder/recorder` — Swift binary, takes `<windowID> <durationSeconds> <outputPath>`. Traps SIGTERM/SIGINT for clean stop.
 - `src/cli.ts` — Bun wrapper. Orchestrates clicks recorder + recorder. Prints recorder PID to stdout.
-- `.claude/skills/stage/SKILL.md` — this file.
+- `.claude/skills/stage-studio/SKILL.md` — this file.
 - `SHAPE-ui.md` — design rationale for the Claude-as-UI approach.
 - `README.md` — full architecture write-up.

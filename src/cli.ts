@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// stage — record screen + clicks + mic, render polished MP4 with auto-zoom on each click.
+// stage-studio — record screen + clicks + mic, render polished MP4 with auto-zoom on each click.
 //
 // Phase 2: ugly end-to-end with a small set of CLI flags. Hardcodes a few things still:
 //   - output resolution 2560x1440 (matches CGEventTap point space on a 5K display)
@@ -64,9 +64,9 @@ function parseArgs(argv: string[]): Args {
     else if (a === "--window" || a === "-w") args.window = argv[++i];
     else if (a === "--window-id") args.windowId = Number(argv[++i]);
     else if (a === "-h" || a === "--help") {
-      console.log(`stage — record a window + render polished MP4
+      console.log(`stage-studio — record a window + render polished MP4
 
-Usage: stage [options]
+Usage: stage-studio [options]
   -t, --duration <s>    recording duration in seconds, or 0 for open-ended
                         (stops on SIGTERM; default 8). Open-ended recordings
                         cap at 5 minutes as a safety.
@@ -80,7 +80,7 @@ Usage: stage [options]
   -h, --help            this help
 
   When --duration 0 is used, the recorder PID is printed to stdout as:
-    [stage] recorder PID: <pid>
+    [stage-studio] recorder PID: <pid>
   Send SIGTERM to that PID to stop the recording cleanly.
 `);
       process.exit(0);
@@ -252,7 +252,7 @@ async function record(args: Args, windowID: number, outputPath: string, workDir:
 
   // Spawn click recorder first — its first stdout line is the display meta breadcrumb
   // (point dims + backing scale), which we need afterward to translate click coords.
-  console.error(`[stage] starting input recorder…`);
+  console.error(`[stage-studio] starting input recorder…`);
   const clicksProc = spawn(CLICKS_BIN, [], { stdio: ["ignore", "pipe", "pipe"] });
   writeFileSync(clicksPath, "");
   const clicksOut = Bun.file(clicksPath).writer();
@@ -262,7 +262,7 @@ async function record(args: Args, windowID: number, outputPath: string, workDir:
   await new Promise((r) => setTimeout(r, 400));
 
   spawn("afplay", ["/System/Library/Sounds/Tink.aiff"], { stdio: "ignore" });
-  console.error(`\n[stage] >>> RECORDING ${args.duration}s <<<\n`);
+  console.error(`\n[stage-studio] >>> RECORDING ${args.duration}s <<<\n`);
   // Lock t0 right before recorder spawn. SCK first-frame latency is typically
   // smaller than ffmpeg's (~100-200ms vs ~200-500ms) but still nonzero.
   const t0Epoch = Date.now() / 1000;
@@ -289,7 +289,7 @@ async function record(args: Args, windowID: number, outputPath: string, workDir:
   // Surface the recorder's PID so Claude (or any external controller) can
   // SIGTERM it when the user says "stop". Print in a machine-parseable form.
   if (recorderProc.pid !== undefined) {
-    console.log(`[stage] recorder PID: ${recorderProc.pid}`);
+    console.log(`[stage-studio] recorder PID: ${recorderProc.pid}`);
   }
   // Forward our own SIGTERM/SIGINT to the recorder so foreground Ctrl-C and
   // sigterm-to-cli both work as a clean stop.
@@ -317,15 +317,15 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
 
   if (!existsSync(CLICKS_BIN)) {
-    console.error(`[stage] clicks binary missing at ${CLICKS_BIN} — run \`pnpm run build:clicks\``);
+    console.error(`[stage-studio] clicks binary missing at ${CLICKS_BIN} — run \`pnpm run build:clicks\``);
     process.exit(1);
   }
   if (!existsSync(RECORDER_BIN)) {
-    console.error(`[stage] recorder binary missing at ${RECORDER_BIN} — run \`pnpm run build:recorder\``);
+    console.error(`[stage-studio] recorder binary missing at ${RECORDER_BIN} — run \`pnpm run build:recorder\``);
     process.exit(1);
   }
   if (!existsSync(WINDOWS_BIN)) {
-    console.error(`[stage] windows binary missing at ${WINDOWS_BIN} — run \`pnpm run build:windows\``);
+    console.error(`[stage-studio] windows binary missing at ${WINDOWS_BIN} — run \`pnpm run build:windows\``);
     process.exit(1);
   }
 
@@ -336,10 +336,10 @@ async function main() {
   // content (occlusion-immune); recorder composites onto a styled background
   // and writes the final MP4 directly. No post-recording stage.
   const windowInfo = await detectWindow({ pattern: args.window, windowId: args.windowId });
-  console.error(`[stage] target window: "${windowInfo.title}" (${windowInfo.app}) ${windowInfo.bounds.w}x${windowInfo.bounds.h} @ (${windowInfo.bounds.x}, ${windowInfo.bounds.y})`);
+  console.error(`[stage-studio] target window: "${windowInfo.title}" (${windowInfo.app}) ${windowInfo.bounds.w}x${windowInfo.bounds.h} @ (${windowInfo.bounds.x}, ${windowInfo.bounds.y})`);
 
   if (args.skipRecord) {
-    console.error(`[stage] --skip-record: no longer supported in v3 (no intermediate stage to reuse). Re-record.`);
+    console.error(`[stage-studio] --skip-record: no longer supported in v3 (no intermediate stage to reuse). Re-record.`);
     process.exit(1);
   }
 
@@ -353,11 +353,11 @@ async function main() {
   const smoothed = smoothCursor(cursor, CURSOR_SMOOTH_TAU);
   const committed = commitClicks(clicks, smoothed);
 
-  console.error(`[stage] ${committed.length}/${clicks.length} click(s) committed, ${cursor.length} cursor sample(s) (overlay TBD)`);
-  console.error(`[stage] wrote ${outputPath}`);
+  console.error(`[stage-studio] ${committed.length}/${clicks.length} click(s) committed, ${cursor.length} cursor sample(s) (overlay TBD)`);
+  console.error(`[stage-studio] wrote ${outputPath}`);
 }
 
 main().catch((err) => {
-  console.error(`[stage] error: ${err.message}`);
+  console.error(`[stage-studio] error: ${err.message}`);
   process.exit(1);
 });

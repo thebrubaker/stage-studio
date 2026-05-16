@@ -1,4 +1,4 @@
-# stage
+# stage-studio
 
 A tiny macOS CLI that records a window and outputs a polished MP4 — single window, isolated from notifications and other apps, composited onto a vibrant background with rounded corners and a soft drop shadow. Built to be driven from a Claude Code chat as much as from the terminal.
 
@@ -11,7 +11,7 @@ Replaces Screen Studio ($89/yr) and OBS (heavy) for one specific need: "I want a
 ## What it does
 
 ```bash
-# in any Claude Code session, with the stage skill loaded:
+# in any Claude Code session, with the stage-studio skill loaded:
 you:    let's record a clip of this Linear ticket
 claude: [identifies your Linear window, starts recording]
         "Recording. Say stop when done."
@@ -42,8 +42,8 @@ You need:
 Then:
 
 ```bash
-git clone https://github.com/<owner>/stage.git
-cd stage
+git clone https://github.com/<owner>/stage-studio.git
+cd stage-studio
 bun install
 pnpm run build      # compiles the three Swift binaries
 ```
@@ -54,7 +54,7 @@ That's it. The binaries land in `cmd/clicks/clicks`, `cmd/windows/windows`, `cmd
 
 ## One-time permission setup
 
-macOS requires four TCC permissions for stage to work. **Grant them all to the terminal app you'll run stage from** (Terminal, iTerm, cmux, etc.). Open *System Settings → Privacy & Security* and toggle each:
+macOS requires four TCC permissions for stage-studio to work. **Grant them all to the terminal app you'll run stage-studio from** (Terminal, iTerm, cmux, etc.). Open *System Settings → Privacy & Security* and toggle each:
 
 | Permission | Why | Symptom if missing |
 |---|---|---|
@@ -71,7 +71,7 @@ macOS requires four TCC permissions for stage to work. **Grant them all to the t
 
 ### 1. From a Claude Code chat (the intended UX)
 
-The repo ships with a Claude skill at `.claude/skills/stage/SKILL.md`. Open the repo (or any project that has stage installed) in Claude Code, and ask Claude to record something:
+The repo ships with a Claude skill at `.claude/skills/stage-studio/SKILL.md`. Open the repo (or any project that has stage-studio installed) in Claude Code, and ask Claude to record something:
 
 > *"Let me record a clip of what we just built."*
 
@@ -97,7 +97,7 @@ bun run cli --duration 10 --window "Linear" --output ./demo.mp4
 
 # open-ended recording — runs until you SIGTERM the recorder PID
 bun run cli --duration 0 --window-id 8387 --output ./demo.mp4
-# prints "[stage] recorder PID: 12345" to stdout
+# prints "[stage-studio] recorder PID: 12345" to stdout
 # in another shell: kill -TERM 12345  (recorder finalizes, MP4 saved)
 ```
 
@@ -201,8 +201,8 @@ This repo contains the trajectory of a few earlier attempts, kept as reference:
 ## Repo layout
 
 ```
-stage/
-├── .claude/skills/stage/  Claude skill for the chat-driven flow
+stage-studio/
+├── .claude/skills/stage-studio/  Claude skill for the chat-driven flow
 ├── assets/                    Default background image
 ├── cmd/
 │   ├── clicks/                CGEventTap mouse capture (Swift)
