@@ -1,4 +1,4 @@
-// clickzoom recorder — captures a single macOS window with ScreenCaptureKit,
+// stage recorder — captures a single macOS window with ScreenCaptureKit,
 // composites it onto a styled background via Core Image, and writes a finished
 // H.264 MP4 with optional mic audio.
 //
@@ -89,7 +89,7 @@ func loadBackgroundImage(path: String, width: Int, height: Int) -> CIImage? {
     return positioned.cropped(to: CGRect(x: 0, y: 0, width: outW, height: outH))
 }
 
-/// Builds the styled background CIImage that frames every clickzoom recording.
+/// Builds the styled background CIImage that frames every stage recording.
 ///
 /// Uses SwiftUI's `MeshGradient` (Sequoia+) for a tasteful warm-tone field
 /// that recedes behind the recorded window. A 3x3 mesh gives enough control
@@ -403,7 +403,7 @@ func setupAudioCapture(recorder: Recorder) throws -> AVCaptureSession {
     session.addInput(input)
 
     let output = AVCaptureAudioDataOutput()
-    let queue = DispatchQueue(label: "clickzoom.recorder.audio", qos: .userInteractive)
+    let queue = DispatchQueue(label: "stage.recorder.audio", qos: .userInteractive)
     output.setSampleBufferDelegate(recorder, queue: queue)
     guard session.canAddOutput(output) else {
         throw NSError(domain: "recorder", code: 12, userInfo: [NSLocalizedDescriptionKey: "can't add audio output"])
@@ -470,7 +470,7 @@ func run() async throws {
     let recorder = try Recorder(outputURL: outputURL, outputW: outW, outputH: outH, withAudio: captureAudio, composer: composer)
 
     let stream = SCStream(filter: filter, configuration: config, delegate: recorder)
-    let videoQueue = DispatchQueue(label: "clickzoom.recorder.video", qos: .userInteractive)
+    let videoQueue = DispatchQueue(label: "stage.recorder.video", qos: .userInteractive)
     try stream.addStreamOutput(recorder, type: .screen, sampleHandlerQueue: videoQueue)
 
     var audioSession: AVCaptureSession? = nil

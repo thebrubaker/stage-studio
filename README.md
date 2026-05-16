@@ -1,46 +1,144 @@
-# clickzoom
+# stage
 
-CLI tool that records a macOS window + mic and renders a polished MP4 with the window posed on a styled 16:9 background.
+A tiny macOS CLI that records a window and outputs a polished MP4 — single window, isolated from notifications and other apps, composited onto a vibrant background with rounded corners and a soft drop shadow. Built to be driven from a Claude Code chat as much as from the terminal.
 
-This is a personal prototype testing the thesis that the primitives for a Screen Studio clone are now cheap enough that the whole tool is a weekend solo build, not a product.
+Replaces Screen Studio ($89/yr) and OBS (heavy) for one specific need: "I want a clean shareable clip of this thing on my screen, right now, without opening any software."
 
-**Mac-only, CLI-only, single display.**
+**Mac-only.** Tested on Apple Silicon, macOS 15+.
 
-## Status
+---
 
-- **v3 (current):** SCK captures a single window → Core Image composites onto styled 16:9 canvas (gradient, drop shadow, padded) → AVAssetWriter outputs final MP4 with mic audio. One Swift process, no Remotion, hardware-accelerated end to end.
-- **v2.x (deprecated):** captured to HEVC-with-alpha MOV intermediate, composited through Remotion. Removed because Remotion's pipeline silently flattens source alpha — see [DEVLOG](#v23-failure-mode-alpha-lost-in-remotion) below.
-- **v1 (backlogged):** zoom-on-click + cursor tracking. The renderer (`render/src/Clickzoom.tsx`) and self-validation harness (`test/`) remain in repo as reference. See "v1 backlog" below for the parked design.
-
-## Quick start
+## What it does
 
 ```bash
-# one-time
-bun install
-pnpm install --dir render
-pnpm run build    # compiles all three Swift binaries (clicks, windows, recorder)
-
-# record a target window + render onto styled canvas (8 second default)
-bun run cli --duration 10 --window "Linear" --output ./out/demo.mp4
-
-# or let it pick whichever non-terminal window is frontmost when recording starts
-bun run cli --duration 10 --output ./out/demo.mp4
+# in any Claude Code session, with the stage skill loaded:
+you:    let's record a clip of this Linear ticket
+claude: [identifies your Linear window, starts recording]
+        "Recording. Say stop when done."
+you:    [demo your thing, then come back to claude]
+        stop
+claude: "Done. out/linear-dig228-20260516-105132.mp4"
 ```
 
-Listen for the **Tink** system sound — that's the cue to start clicking. The CLI exits with the rendered MP4 written to `--output`.
+Output:
 
-## What you need (one-time)
+- 1920×1080 H.264 MP4 with mic audio
+- Only your target window — overlapping windows, notifications, the dock, the menubar all stay out
+- The window has its native rounded corners, with a soft drop shadow and the Big Sur Color Day wallpaper as the background
 
-Grant **all four** of these permissions to your terminal app (cmux, Terminal, iTerm, whatever you're running clickzoom from). Restart the terminal app after enabling Input Monitoring — that grant doesn't take effect until the app restarts.
+Or use it as a plain CLI without Claude — see below.
 
-- **Screen Recording** (Privacy & Security → Screen Recording). Required for ScreenCaptureKit. Without it the recorder produces empty/blank output silently.
-- **Microphone** (Privacy & Security → Microphone). Required for AVCaptureSession audio. Without it the recorder still works but with no audio track.
-- **Accessibility** (Privacy & Security → Accessibility). Required for `CGEvent.tapCreate` to succeed.
-- **Input Monitoring** (Privacy & Security → Input Monitoring). Required for mouse-button events to reach the tap. With this missing, cursor *move* events still arrive but *click* events are silently filtered upstream.
+---
 
-Plus the usual toolchain: `ffmpeg` (used for ffprobe + frame extraction, not capture), `swift` (Xcode CLT), `bun`, `pnpm`.
+## Quick install
 
-## How it works (v3)
+You need:
+
+- macOS 15 or later (Sequoia / Tahoe)
+- Xcode Command Line Tools: `xcode-select --install`
+- [Bun](https://bun.sh): `curl -fsSL https://bun.sh/install | bash`
+- ffmpeg (optional, only for debugging frame extraction): `brew install ffmpeg`
+
+Then:
+
+```bash
+git clone https://github.com/<owner>/stage.git
+cd stage
+bun install
+pnpm run build      # compiles the three Swift binaries
+```
+
+That's it. The binaries land in `cmd/clicks/clicks`, `cmd/windows/windows`, `cmd/recorder/recorder`.
+
+---
+
+## One-time permission setup
+
+macOS requires four TCC permissions for stage to work. **Grant them all to the terminal app you'll run stage from** (Terminal, iTerm, cmux, etc.). Open *System Settings → Privacy & Security* and toggle each:
+
+| Permission | Why | Symptom if missing |
+|---|---|---|
+| **Screen Recording** | ScreenCaptureKit needs this to capture window pixels | Recordings come out blank / black, no error |
+| **Microphone** | AVCaptureSession needs this for audio | Video has no audio track |
+| **Accessibility** | `CGEvent.tapCreate` for cursor tracking | Cursor positions not captured (currently unused in output, but recorded for future overlays) |
+| **Input Monitoring** | Needed for mouse-button events to reach the event tap | Move events captured but click events silently dropped |
+
+**Important:** after enabling **Input Monitoring**, you must restart the terminal app — that grant doesn't take effect until the parent process restarts.
+
+---
+
+## Two ways to use it
+
+### 1. From a Claude Code chat (the intended UX)
+
+The repo ships with a Claude skill at `.claude/skills/stage/SKILL.md`. Open the repo (or any project that has stage installed) in Claude Code, and ask Claude to record something:
+
+> *"Let me record a clip of what we just built."*
+
+Claude will:
+
+1. Enumerate your open windows
+2. Pick the relevant one contextually, or ask which one if it's ambiguous
+3. Spawn the recorder in a background bash task with open-ended duration
+4. Tell you "recording — say stop when done"
+5. When you say stop, SIGTERM the recorder so it finalizes the MP4 cleanly
+6. Tell you where the output landed
+
+This is the path everything is optimized for. You stay in chat the whole time.
+
+### 2. From the terminal directly
+
+```bash
+# fixed-duration recording targeting the frontmost non-terminal window
+bun run cli --duration 8 --output ./demo.mp4
+
+# fixed duration, targeting a window by title substring
+bun run cli --duration 10 --window "Linear" --output ./demo.mp4
+
+# open-ended recording — runs until you SIGTERM the recorder PID
+bun run cli --duration 0 --window-id 8387 --output ./demo.mp4
+# prints "[stage] recorder PID: 12345" to stdout
+# in another shell: kill -TERM 12345  (recorder finalizes, MP4 saved)
+```
+
+Listen for the **Tink** sound — that's recording start. **Pop** is recording stop.
+
+#### CLI reference
+
+```
+  -t, --duration <s>    seconds, or 0 for open-ended (stops on SIGTERM, 5min cap)
+  -o, --output <path>   final MP4 path (default ./out.mp4)
+  -w, --window <pat>    target window pattern (case-insensitive substring)
+      --window-id <N>   target specific CGWindowID (use `cmd/windows list` to find)
+      --work-dir <p>    intermediate artifacts (default ./out)
+      --skip-record     reuse the last recording, re-render only
+```
+
+#### Picking a window manually
+
+```bash
+./cmd/windows/windows list           # all on-screen windows as JSON
+./cmd/windows/windows frontmost      # frontmost non-terminal window
+./cmd/windows/windows find Slack     # fuzzy match on app/title
+```
+
+---
+
+## Changing the background
+
+Default is the Big Sur Color Day wallpaper shipped in `assets/big-sur-graphic.jpg`. Override with any JPEG/PNG/HEIC:
+
+```bash
+RECORDER_BG_IMAGE=/path/to/your-wallpaper.png bun run cli ...
+```
+
+The image is scale-to-filled and center-cropped to 1920×1080. Square wallpapers (like Apple's 6016×6016 originals) work great.
+
+If you want a procedural background instead of an image, set `RECORDER_BG_IMAGE=""` and the recorder falls back to a SwiftUI `MeshGradient` with a warm peach→mocha palette.
+
+---
+
+## How it works
 
 ```
 ┌──────────────────┐
@@ -56,19 +154,18 @@ Plus the usual toolchain: `ffmpeg` (used for ffprobe + frame extraction, not cap
                                    │ windowID, durationS, outputPath
                                    ▼
                           ┌──────────────────────────────┐
-                          │ cmd/recorder (Swift, owns    │
-                          │ the whole pipeline)          │
+                          │ cmd/recorder (Swift)         │
                           │                              │
-                          │ SCK capture (window-only,    │
-                          │   BGRA with alpha)           │
+                          │ ScreenCaptureKit             │
+                          │   SCContentFilter(window:)   │
+                          │   → BGRA with alpha          │
                           │      ↓                       │
                           │ AVCaptureSession mic         │
                           │      ↓                       │
-                          │ Core Image compositor        │
-                          │ (Metal-backed CIContext)     │
-                          │  - linear gradient bg        │
-                          │  - alpha-shaped drop shadow  │
-                          │  - aspect-fit + pad window   │
+                          │ Core Image (Metal)           │
+                          │   background image           │
+                          │   + alpha-shaped drop shadow │
+                          │   + aspect-fit window        │
                           │      ↓                       │
                           │ AVAssetWriter H.264 + AAC    │
                           └────────────┬─────────────────┘
@@ -76,72 +173,52 @@ Plus the usual toolchain: `ffmpeg` (used for ffprobe + frame extraction, not cap
                                    output.mp4
 ```
 
-**One process, hardware-accelerated end to end.** SCK captures only the target window's actual rendered content (occlusion-immune); Core Image (with Metal backing) composites each frame onto a styled background using the window's native alpha mask as the shape (so corners curve correctly across every app); AVAssetWriter encodes the composite directly to MP4 with muxed mic audio. No Remotion, no intermediate file, no headless Chromium.
+**One process, hardware-accelerated end to end.** ScreenCaptureKit captures the target window's actual rendered content — not what's on screen. Notifications, occluding windows, the dock, the menubar: none of them appear in the output. Core Image composites each captured frame onto the styled background using the window's native alpha as the shape (so corners curve correctly regardless of the app). AVAssetWriter encodes the composite directly with muxed mic audio. No Remotion, no Chromium, no intermediate files.
 
-**Window detection:** `cmd/windows/main.swift` queries `CGWindowListCopyWindowInfo` for on-screen windows. Modes: `list`, `frontmost` (excludes the calling terminal), `find <pattern>` (substring match on app + title). Returns `windowId` (a `CGWindowID`).
+---
 
-**Capture + compose:** `cmd/recorder/main.swift` uses **ScreenCaptureKit** with `SCContentFilter(desktopIndependentWindow:)`. The captured `CMSampleBuffer` carries `BGRA` pixels with alpha=0 at the window's corner gaps. A Core Image `Composer` (built on a Metal-backed `CIContext`):
-- builds a `CILinearGradient` background at output dimensions (1920×1080) once at init
-- per frame: scales+positions the source inside the canvas with padding, builds a drop shadow from the window's own alpha mask (`CISourceInCompositing` + `CIGaussianBlur` + offset), composites bg → shadow → window
-- renders the composite to a pooled `CVPixelBuffer` and wraps it as a new `CMSampleBuffer` preserving the source's timing
+## Architecture history
 
-The window's natural rounded corners come through automatically — no per-app radius matching, because the alpha mask *is* the window shape.
+This repo contains the trajectory of a few earlier attempts, kept as reference:
 
-## CLI flags
+- **`render/`** — original Remotion-based compositor. Worked for the initial zoom-on-click feature but couldn't preserve HEVC-with-alpha source video through its pipeline. Replaced by the Swift-side Core Image compositor in `cmd/recorder/`.
+- **`test/`** — synthetic pixel-sampling validation harness built for the abandoned zoom-on-click feature. Calibration grid + center-pixel color assertions. Pattern still useful if a similar visual feature comes back.
+- **`SHAPE-ui.md`** — design doc on why "Claude as the UI" beat building a SwiftUI app. Saved hours of work.
 
-```
-clickzoom --help
-  -t, --duration <s>    recording duration in seconds (default 8)
-  -o, --output <path>   final MP4 path (default ./out.mp4)
-      --work-dir <p>    intermediate artifacts (default ./out)
-      --display <n>     avfoundation video device index (default: auto-detect)
-      --mic <n>         avfoundation audio device index (default: auto-detect)
-      --skip-record     reuse last recording, re-render only
-  -w, --window <pat>    target window pattern (case-insensitive substring;
-                        default: frontmost non-terminal window)
-      --no-compose      skip styled-canvas composite; fall back to v1 Clickzoom
-                        composition (zoom-on-click, currently backlogged)
-```
+---
 
-The `--skip-record` flag is the tuning loop: record once, then iterate on Remotion constants without re-recording.
+## Known limits
 
-## v1 backlog: zoom-on-click
+- **Browser windows include browser chrome.** Cropping a Chrome window gets the address bar and tabs too. Future: app-specific chrome stripping.
+- **5-minute hard cap on open-ended recordings.** A safety to prevent forgotten recordings from filling the disk. Bump via `OPEN_ENDED_MAX_DURATION_S` in `cmd/recorder/main.swift` if you need longer.
+- **A/V sync drifts over long recordings.** Fine for ≤30s clips. ScreenCaptureKit and AVCaptureSession share the mach clock so it's a slow drift, not a sudden one.
+- **No pause.** Stop and re-record covers the same need with less mechanism.
+- **X / hard kill on the recorder loses the recording.** SIGKILL doesn't give AVAssetWriter time to finalize the MP4. Stop via "say stop to Claude" or `kill -TERM <recorder-pid>`, which traps cleanly. Documented gap.
+- **Mac-only, single display, no webcam, no system audio (mic only).**
 
-The original direction was auto-zoom-on-click — a subtle camera pointer drawing the viewer's eye to where you click. Three iterations on cursor tracking taught us:
-
-- **Anchoring math:** transform-origin is *not* visible-center. Use `translate(-tx, -ty) scale(s)` with origin top-left so `tx = S*click.x - W/2` puts the click at output center. Clamp `tx ∈ [0, W*(S-1)]`.
-- **Cursor tracking is hard to get right:** chasing the cursor every frame yanks the camera away from where the user clicked. The delta-relative tracking we built (anchor at click + cursor movement since click) helps but the effect still feels too strong in real use.
-- **Dwell-commit:** a click only becomes a zoom event if the cursor stays near the click for ~300ms after. Drops transit clicks. Worked correctly in the harness, didn't feel right in practice.
-
-**Why backlogged:** the effect comes off too strong even when math is right, and the user attention required to validate edge cases ("did the camera follow correctly?") exceeded the apparent value. v2 (window-on-canvas) is the higher-value path.
-
-**Where it lives:** `render/src/Clickzoom.tsx` (renderer), `test/` (synthetic validation harness with calibration grid + pixel-sampling assertions), click+cursor capture pipeline in `cmd/clicks/` and `src/cli.ts`. The CLI still records clicks and cursor for every session; v2 just doesn't use them. Switch back with `--no-compose`.
-
-**If we revisit:** consider showing the click as a soft pulse/ring overlay on the cropped window in `WindowCompose` instead of a camera move. The capture data is already there.
-
-## Known limits / v2.next ideas
-
-- **Browser windows include browser chrome.** Cropping a Chrome window gets the address bar and tabs too. Future: app-specific chrome stripping (Chrome content area, Safari content area).
-- **Window must stay still during recording.** Bounds are captured once at recording start. If the user drags the window mid-recording, the crop drifts. Fix: sample bounds at intervals via `windows find` in a side process, interpolate.
-- **A/V sync drift over long recordings.** Fine for ≤30s clips. For longer recordings the right answer is a single Swift binary using ScreenCaptureKit + AVAudioEngine sharing one mach clock — eliminates timestamp alignment entirely.
-- **Background gradient is fixed.** Should be configurable (preset palette + custom).
-- **No multi-monitor, no Linux/Windows, no GUI.**
+---
 
 ## Repo layout
 
 ```
-clickzoom/
-├── cmd/clicks/       Swift CGEventTap recorder
-│   ├── main.swift
-│   └── clicks        compiled binary (committed for convenience)
-├── src/cli.ts        Bun orchestrator
-├── render/           Remotion project
-│   ├── src/
-│   │   ├── Root.tsx
-│   │   ├── Clickzoom.tsx   ← composition with zoom math
-│   │   ├── index.ts
-│   │   └── input.json      ← CLI overwrites this per-run
-│   ├── public/source.mp4   ← CLI stages here
-│   └── remotion.config.ts
-└── out/              recordings and final outputs
+stage/
+├── .claude/skills/stage/  Claude skill for the chat-driven flow
+├── assets/                    Default background image
+├── cmd/
+│   ├── clicks/                CGEventTap mouse capture (Swift)
+│   ├── windows/               CGWindowListCopyWindowInfo enumeration (Swift)
+│   ├── recorder/              SCK + Core Image + AVAssetWriter pipeline (Swift)
+│   └── gradient-preview/      Standalone renderer for background variants (Swift)
+├── render/                    v1 Remotion compositor (backlogged)
+├── src/
+│   └── cli.ts                 Bun orchestrator
+├── test/                      v1 pixel-sampling validation harness
+├── SHAPE-ui.md                Design rationale for Claude-as-UI
+└── README.md                  this file
 ```
+
+---
+
+## License
+
+MIT.

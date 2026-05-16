@@ -7,3 +7,7 @@ out/
 # Test recordings staged into render/public for the v1 Remotion-based renderer
 # (backlogged). Regenerated per run by the cli.
 render/public/source.*
+
+# Stray cross-project agent memory that landed here at some point — belongs
+# in the workspace-level ~/Code/.claude/, not this repo.
+.claude/agent-memory/linear-workflow/

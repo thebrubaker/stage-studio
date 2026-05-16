@@ -1,4 +1,4 @@
-// clickzoom input recorder — taps mouse-down + mouseMoved + drag events and emits JSONL to stdout.
+// stage input recorder — taps mouse-down + mouseMoved + drag events and emits JSONL to stdout.
 //
 // Output schema (one line per event):
 //   clicks:  {"kind":"click","epoch":1715617900.123,"x":824.0,"y":512.0,"button":"left"}
@@ -73,7 +73,7 @@ guard let tap = CGEvent.tapCreate(
     callback: callback,
     userInfo: nil
 ) else {
-    FileHandle.standardError.write(Data("clickzoom: failed to create event tap — grant Accessibility permission in System Settings\n".utf8))
+    FileHandle.standardError.write(Data("stage: failed to create event tap — grant Accessibility permission in System Settings\n".utf8))
     exit(1)
 }
 
@@ -93,6 +93,6 @@ if let screen = NSScreen.main {
 }
 
 // Stderr breadcrumb so the parent process can detect we're live.
-FileHandle.standardError.write(Data("clickzoom-input: ready\n".utf8))
+FileHandle.standardError.write(Data("stage-input: ready\n".utf8))
 
 CFRunLoopRun()

@@ -1,10 +1,10 @@
 {
-  "name": "clickzoom",
+  "name": "stage",
   "version": "0.0.1",
   "private": true,
   "type": "module",
   "bin": {
-    "clickzoom": "./src/cli.ts"
+    "stage": "./src/cli.ts"
   },
   "scripts": {
     "build:clicks": "swiftc -O cmd/clicks/main.swift -o cmd/clicks/clicks",
