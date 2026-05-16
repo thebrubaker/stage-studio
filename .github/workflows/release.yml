@@ -51,24 +51,28 @@ jobs:
       - name: Package release tarball
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          ARCHIVE="stage-studio-${TAG}-arm64.tar.gz"
+          STAGE_DIR="stage-studio-${TAG}"
+          ARCHIVE="${STAGE_DIR}-arm64.tar.gz"
 
-          # Bundle just what a user needs to run stage-studio after extracting.
-          # Excludes: render/ (v1 backlog), test/, out/, node_modules/.
-          tar -czvf "$ARCHIVE" \
-            cmd/clicks/clicks \
-            cmd/windows/windows \
-            cmd/recorder/recorder \
-            cmd/gradient-preview/preview \
-            src/cli.ts \
-            package.json \
-            assets/big-sur-graphic.jpg \
-            .claude/skills/stage-studio/ \
-            README.md \
-            LICENSE
+          # Stage into a top-level dir so extraction yields `stage-studio-vX.Y.Z/`
+          # rather than dumping files into the user's cwd. BSD tar (macOS) doesn't
+          # support --transform / --one-top-level, so we copy then tar.
+          mkdir -p "$STAGE_DIR"/{cmd/clicks,cmd/windows,cmd/recorder,cmd/gradient-preview,src,assets,.claude/skills}
+          cp cmd/clicks/clicks                 "$STAGE_DIR/cmd/clicks/"
+          cp cmd/windows/windows               "$STAGE_DIR/cmd/windows/"
+          cp cmd/recorder/recorder             "$STAGE_DIR/cmd/recorder/"
+          cp cmd/gradient-preview/preview      "$STAGE_DIR/cmd/gradient-preview/"
+          cp src/cli.ts                        "$STAGE_DIR/src/"
+          cp package.json                      "$STAGE_DIR/"
+          cp assets/big-sur-graphic.jpg        "$STAGE_DIR/assets/"
+          cp -R .claude/skills/stage-studio    "$STAGE_DIR/.claude/skills/"
+          cp README.md LICENSE                 "$STAGE_DIR/"
+
+          tar -czvf "$ARCHIVE" "$STAGE_DIR"
 
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
           echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "STAGE_DIR=$STAGE_DIR" >> "$GITHUB_ENV"
           ls -la "$ARCHIVE"
 
       - name: Create GitHub Release
@@ -86,10 +90,10 @@ jobs:
             ```bash
             curl -L -o stage-studio.tar.gz "https://github.com/thebrubaker/stage-studio/releases/download/${{ env.TAG }}/${{ env.ARCHIVE }}"
             tar -xzf stage-studio.tar.gz
-            cd stage-studio* 2>/dev/null || true
+            cd ${{ env.STAGE_DIR }}
 
-            # macOS will quarantine the unsigned binaries on first run. Strip:
-            xattr -d com.apple.quarantine cmd/*/clicks cmd/*/windows cmd/*/recorder 2>/dev/null || true
+            # macOS quarantines unsigned binaries on first run. Strip:
+            xattr -dr com.apple.quarantine cmd/ 2>/dev/null || true
 
             # Install Bun if you don't have it:
             curl -fsSL https://bun.sh/install | bash
