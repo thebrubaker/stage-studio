@@ -111,8 +111,25 @@ onto the *same* recorder. The Claude and CLI flows are untouched.
 
 ```bash
 pnpm run build:app
-open app/build/StageStudio.app     # or run the binary inside for logs on stdout
+ditto "app/build/Stage Studio.app" "/Applications/Stage Studio.app"
+open "/Applications/Stage Studio.app"
 ```
+
+Its permanent home is `/Applications/Stage Studio.app`. The bundle carries its
+own copy of the recorder and the background art, so it keeps working with no
+checkout present — don't point a login item at a build directory.
+
+**Identity is frozen on purpose.** The bundle id `io.digitalpine.stage-studio`
+is the key macOS files every permission grant under, and the app is signed with
+a real Developer ID rather than ad-hoc. Together those give it a designated
+requirement that is byte-identical on every rebuild, so Screen Recording and
+Microphone grants survive rebuilds instead of resetting. Changing the bundle id
+— or going back to ad-hoc signing — makes macOS treat it as a brand-new app and
+forget every permission. Don't.
+
+The build uses hardened runtime (needed for notarization later), which gates the
+microphone behind `com.apple.security.device.audio-input` — hence the
+entitlements file applied to both the app and the embedded recorder.
 
 It's an agent app (`LSUIElement`) — no Dock icon, no window until you summon one.
 There's a small menu-bar item, but that's a quit escape hatch, not the interface.
@@ -258,9 +275,10 @@ This repo contains the trajectory of a few earlier attempts, kept as reference:
 - **No pause.** Stop and re-record covers the same need with less mechanism.
 - **X / hard kill on the recorder loses the recording.** SIGKILL doesn't give AVAssetWriter time to finalize the MP4. Stop via "say stop to Claude" or `kill -TERM <recorder-pid>`, which traps cleanly. Documented gap.
 - **Mac-only, single display, no webcam, no system audio (mic only).**
-- **The hotkey app is unsigned and locates the recorder by relative path.** It
-  expects to live at `<repo>/app/build/StageStudio.app`; set `STAGE_STUDIO_ROOT`
-  if you move it. No signing/notarization — single-user local phase.
+- **The hotkey app is signed but not notarized yet.** `spctl` rejects it as
+  "Unnotarized Developer ID". A locally built copy has no quarantine flag so it
+  launches fine; a copy that travels (DMG, download) would be blocked until
+  notarization lands.
 - **The hotkey app's hotkey is hardcoded to `⌥⌘R`.** No settings UI; if another
   app already owns that combination, registration fails and it says so on stderr.
 
@@ -273,9 +291,9 @@ stage-studio/
 ├── .claude/skills/stage-studio/  Claude skill for the chat-driven flow
 ├── app/                       Hotkey recorder — LSUIElement agent app (Swift)
 │   ├── Sources/               main, AppDelegate, picker, pill, session, hotkeys
-│   ├── Resources/Info.plist   LSUIElement, mic usage string
+│   ├── Resources/             Info.plist, entitlements, icon-master.png
 │   ├── tools/inkbox/          Measures text ink vs. a row midline in a shot
-│   └── build.sh               → build/StageStudio.app (unsigned, ad-hoc signed)
+│   └── build.sh               → build/Stage Studio.app (Developer ID signed)
 ├── assets/                    Default background image
 ├── cmd/
 │   ├── clicks/                CGEventTap mouse capture (Swift)

@@ -36,9 +36,9 @@ final class Recorder {
 
     // MARK: - Repo layout
 
-    /// The bundle lives at <repo>/app/build/StageStudio.app, so the repo is three
-    /// levels up. `STAGE_STUDIO_ROOT` overrides it for anyone running the bundle
-    /// from somewhere else.
+    /// Only meaningful for dev builds run from inside the checkout. An installed
+    /// app in /Applications has no repo, which is exactly why the bundled copies
+    /// below are consulted first.
     static var repoRoot: URL {
         if let override = ProcessInfo.processInfo.environment["STAGE_STUDIO_ROOT"] {
             return URL(fileURLWithPath: override)
@@ -49,13 +49,29 @@ final class Recorder {
             .deletingLastPathComponent()  // <repo>
     }
 
-    static var binaryURL: URL { repoRoot.appendingPathComponent("cmd/recorder/recorder") }
+    /// Bundled copy first, checkout second.
+    ///
+    /// The app's permanent home is /Applications, so it cannot depend on a
+    /// checkout that may be moved or deleted — `build.sh` embeds the recorder in
+    /// `Contents/MacOS/`. The repo fallback keeps a dev build working when the
+    /// helper hasn't been built into the bundle yet.
+    static var binaryURL: URL {
+        let bundled = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/MacOS/recorder")
+        if FileManager.default.isExecutableFile(atPath: bundled.path) { return bundled }
+        return repoRoot.appendingPathComponent("cmd/recorder/recorder")
+    }
 
     /// Same default background the CLI uses, so both front doors produce clips
     /// that look like they came from the same tool.
     static var backgroundImageURL: URL? {
+        let fm = FileManager.default
+        if let bundled = Bundle.main.url(forResource: "big-sur-graphic", withExtension: "jpg"),
+           fm.fileExists(atPath: bundled.path) {
+            return bundled
+        }
         let url = repoRoot.appendingPathComponent("assets/big-sur-graphic.jpg")
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        return fm.fileExists(atPath: url.path) ? url : nil
     }
 
     static func defaultOutputURL(now: Date = Date()) -> URL {

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Hardened runtime blocks microphone access unless the binary asks for it.
+	     The recorder captures a mic track, so BOTH the app and the embedded
+	     recorder are signed with this — the entitlement is checked per-binary,
+	     even though the TCC prompt is attributed to the parent app. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+</dict>
+</plist>
