@@ -20,7 +20,7 @@ func usage() -> Never {
       StageStudio [--debug-show <surface>] [--debug-midline] [--debug-freeze]
 
     Debug flags (summon a surface deterministically, no hotkey / no recording):
-      --debug-show <surface>     picker | pill-countdown | pill-recording | pill-saved
+      --debug-show <surface>     menu | picker | pill-countdown | pill-recording | pill-saved
       --debug-capture <png>      screenshot the surface, then quit (self-cleaning)
       --debug-capture-delay <s>  settle time before the shot (default 1.8)
       --debug-timeout <s>        hard teardown for interactive runs (default 25)
@@ -28,12 +28,14 @@ func usage() -> Never {
       --debug-freeze             hold animations at their resting phase
       --debug-hover              force the saved filename's hover affordance on
       --debug-reveal             reveal the newest recording in Finder, then quit
+      --debug-reveal-recent <n>  fire the status menu's Nth recent item, then quit
       --debug-agent              dress the surface as an agent session (ring + attribution)
       --debug-label <name>       who the attribution credits (default Claude)
 
     End-to-end (drives the real session, then quits):
       --debug-record <id|pattern>   window to record (CGWindowID or app/title text)
       --debug-record-seconds <s>    how long to record (default 5)
+      --debug-record-output <path>  where to write it (default: Desktop)
     """
     print(text)
     exit(0)
@@ -59,6 +61,13 @@ while i < argv.count {
         options.debugHover = true
     case "--debug-reveal":
         options.debugReveal = true
+    case "--debug-reveal-recent":
+        i += 1
+        guard let index = Int(argv[safe: i] ?? "") else {
+            FileHandle.standardError.write(Data("--debug-reveal-recent needs an index\n".utf8))
+            exit(64)
+        }
+        options.debugRevealRecent = index
     case "--debug-agent":
         options.debugAgent = true
     case "--debug-label":
@@ -91,6 +100,13 @@ while i < argv.count {
     case "--debug-record-seconds":
         i += 1
         options.debugRecordSeconds = Double(argv[safe: i] ?? "") ?? options.debugRecordSeconds
+    case "--debug-record-output":
+        i += 1
+        guard i < argv.count else {
+            FileHandle.standardError.write(Data("--debug-record-output needs a path\n".utf8))
+            exit(64)
+        }
+        options.debugRecordOutput = argv[i]
     case "-h", "--help":
         usage()
     default:

@@ -154,7 +154,18 @@ microphone behind `com.apple.security.device.audio-input` — hence the
 entitlements file applied to both the app and the embedded recorder.
 
 It's an agent app (`LSUIElement`) — no Dock icon, no window until you summon one.
-There's a small menu-bar item, but that's a quit escape hatch, not the interface.
+There's a small menu-bar item, but that's a back pocket, not the interface: start
+a recording, quit, and — the one thing the pill can't do — find a recording again
+after its pill has faded.
+
+**Recent Recordings.** The menu lists the last five saves, newest first; clicking
+one reveals it in Finder, selected, exactly as clicking the saved pill's filename
+does. Every recording goes through the app — hotkey, CLI, Claude — so every one
+of them lands here, wherever `--output` pointed. Long names are middle-truncated
+so the timestamp (the part that tells two takes apart) survives. A recording
+you've since moved or thrown away stays listed, greyed and marked *— missing*,
+rather than silently vanishing or beeping at you. The history lives in
+`~/Library/Application Support/Stage Studio/recents.json` and survives relaunch.
 
 **The flow:**
 
@@ -197,12 +208,18 @@ APP="app/build/Stage Studio.app/Contents/MacOS/StageStudio"
 "$APP" --debug-show pill-saved --debug-hover         # filename's click affordance
 "$APP" --debug-reveal                                # exercise the Finder reveal
 
+# the status menu — opened for real, with the real history in it
+"$APP" --debug-show menu --debug-capture /tmp/menu.png
+"$APP" --debug-reveal-recent 0    # click its Nth recent item (disabled = no-op)
+
 # the agent treatment — violet ring + "Claude · " attribution
 "$APP" --debug-show pill-countdown --debug-agent --debug-midline
 "$APP" --debug-show pill-recording --debug-agent --debug-label "Claude"
 
 # drive the whole session against one window, then quit
 "$APP" --debug-record "Safari" --debug-record-seconds 5
+"$APP" --debug-record "Safari" --debug-record-seconds 3 \
+       --debug-record-output /tmp/take.mp4   # somewhere disposable
 ```
 
 `app/tools/inkbox` measures where text ink actually sits relative to a row's

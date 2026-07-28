@@ -27,11 +27,21 @@ struct LaunchOptions {
     /// case-insensitive substring of app+title) and quit when it's saved.
     var debugRecord: String?
     var debugRecordSeconds: Double = 5
+    /// Where the end-to-end run writes. Same `--output` the control surface takes,
+    /// so a harness recording can land somewhere disposable — and so the history
+    /// it feeds carries the real, arbitrary filenames a caller actually asks for
+    /// rather than only the Desktop default.
+    var debugRecordOutput: String?
     /// Force the saved pill's filename into its hover treatment, so the click
     /// affordance can be screenshotted without parking a pointer on the pill.
     var debugHover = false
     /// Exercise the Finder-reveal call directly, then quit.
     var debugReveal = false
+    /// Fire the status menu's Nth "Recent Recordings" item — the real NSMenuItem,
+    /// its real target/action — then quit. A menu item is only as good as what
+    /// happens when it is clicked, and clicking one for real needs an
+    /// Accessibility grant this app deliberately doesn't have.
+    var debugRevealRecent: Int?
     /// Dress a debug surface as an agent-initiated session (violet ring +
     /// attribution). The agent pill has its own text runs — "Claude · Recording
     /// Linear…", "Claude · 0:42" — and a text run that can't be summoned can't be
@@ -41,7 +51,7 @@ struct LaunchOptions {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let options: LaunchOptions
     private var pill: PillController?
     private var picker: PickerController?
@@ -57,6 +67,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if options.debugReveal {
             revealInFinder(Self.newestRecording())
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { NSApp.terminate(nil) }
+        } else if let index = options.debugRevealRecent {
+            runDebugRevealRecent(index)
         } else if let surface = options.debugShow {
             runDebugSurface(surface)
         } else if let target = options.debugRecord {
@@ -180,8 +192,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Not the interface — the app is the pill and the picker. This exists only
-    /// so an agent app with no Dock icon has a visible way to quit.
+    /// Not the interface — the app is the pill and the picker. This exists so an
+    /// agent app with no Dock icon has a visible way to quit, and (DIG-795) so the
+    /// last five recordings stay findable after their pill has faded.
     private func installStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = NSImage(
@@ -189,22 +202,84 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             accessibilityDescription: "Stage Studio"
         )
         let menu = NSMenu()
+        // The recents section decides its own enablement (a file that has moved
+        // is shown greyed rather than firing into nothing), so AppKit's automatic
+        // validation has to stay out of it.
+        menu.autoenablesItems = false
+        menu.delegate = self
+        rebuildMenu(menu)
+        item.menu = menu
+        statusItem = item
+    }
+
+    /// Rebuilt every time the menu is about to open, not once at launch: the
+    /// history changes underneath it as recordings are made, and a file's
+    /// existence is only worth checking at the moment someone can click it.
+    private func rebuildMenu(_ menu: NSMenu) {
+        menu.removeAllItems()
+
         let record = NSMenuItem(
             title: "Record a Window…", action: #selector(recordFromMenu), keyEquivalent: "r"
         )
         record.keyEquivalentModifierMask = [.command, .option]
         record.target = self
         menu.addItem(record)
+
+        menu.addItem(.separator())
+        let header = NSMenuItem(title: "Recent Recordings", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+
+        let entries = RecentRecordings.shared.entries
+        if entries.isEmpty {
+            let empty = NSMenuItem(title: "Nothing yet", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            empty.indentationLevel = 1
+            menu.addItem(empty)
+        } else {
+            for entry in entries { menu.addItem(recentItem(for: entry)) }
+        }
+
         menu.addItem(.separator())
         menu.addItem(
             NSMenuItem(title: "Quit Stage Studio", action: #selector(NSApp.terminate(_:)), keyEquivalent: "q")
         )
-        item.menu = menu
-        statusItem = item
+    }
+
+    private func recentItem(for entry: RecentRecordings.Entry) -> NSMenuItem {
+        let url = entry.url
+        let exists = FileManager.default.fileExists(atPath: url.path)
+        let name = RecentRecordings.displayName(for: url)
+        // A recording that has been moved or thrown away stays listed but greyed
+        // and labelled — silently dropping it would leave the user wondering
+        // whether the app forgot, and firing a reveal at a dead path would beep
+        // for no reason they can see.
+        let item = NSMenuItem(
+            title: exists ? name : "\(name) — missing",
+            action: #selector(revealRecent(_:)),
+            keyEquivalent: ""
+        )
+        item.target = self
+        item.representedObject = url
+        item.isEnabled = exists
+        item.indentationLevel = 1
+        item.toolTip = url.path
+        return item
     }
 
     @objc private func recordFromMenu() {
         session?.toggle()
+    }
+
+    /// The same reveal the saved pill performs — Finder, with the file selected.
+    @objc private func revealRecent(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        revealInFinder(url)
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === statusItem?.menu else { return }
+        rebuildMenu(menu)
     }
 
     // MARK: - End-to-end harness
@@ -255,7 +330,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 break
             }
         }
-        session.start(window: window)
+        session.start(window: window, output: options.debugRecordOutput.map { URL(fileURLWithPath: $0) })
 
         // Backstop: never leave a recorder running because a phase never arrived.
         DispatchQueue.main.asyncAfter(deadline: .now() + options.debugRecordSeconds + 30) {
@@ -314,7 +389,102 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .appendingPathComponent("Desktop/recording-example.mp4")
     }
 
+    /// Summon the status-item menu itself. Opening a menu runs a modal tracking
+    /// loop that owns the main thread until it closes, so everything after
+    /// `performClick` is scheduled off-main — including the exit, since
+    /// `NSApp.terminate` would sit in a queue the tracking loop never drains.
+    private func runDebugMenu() {
+        installStatusItem()
+        if let menu = statusItem?.menu {
+            rebuildMenu(menu)
+            note("menu items:")
+            for item in menu.items {
+                if item.isSeparatorItem { note("  ---"); continue }
+                note("  \(item.isEnabled ? "•" : "×") \(item.title)")
+            }
+        }
+        armMenuCapture()
+        DispatchQueue.main.async { [self] in
+            note("opening the status menu — Ctrl-C or `pkill -f StageStudio` to dismiss")
+            statusItem?.button?.performClick(nil)
+        }
+    }
+
+    private func armMenuCapture() {
+        let path = options.debugCapture
+        let delay = path == nil ? options.debugTimeout : options.debugCaptureDelay
+        DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+            if let path {
+                if let id = Self.openMenuWindowID() {
+                    Self.captureWindow(id, to: path)
+                } else {
+                    FileHandle.standardError.write(Data(
+                        "stage-studio: no open menu window to capture\n".utf8
+                    ))
+                }
+            }
+            exit(0)
+        }
+    }
+
+    /// The menu is drawn by this process, above the normal window levels — so
+    /// "our biggest high-level window on screen" identifies it without guessing
+    /// at screen coordinates that move with the status item.
+    private nonisolated static func openMenuWindowID() -> CGWindowID? {
+        let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
+            as? [[String: Any]] ?? []
+        let mine = info.filter { ($0[kCGWindowOwnerPID as String] as? pid_t) == getpid() }
+        let candidates = mine.filter {
+            ($0[kCGWindowLayer as String] as? Int ?? 0) >= Int(CGWindowLevelForKey(.popUpMenuWindow))
+        }
+        func area(_ window: [String: Any]) -> Double {
+            guard let bounds = window[kCGWindowBounds as String] as? [String: Any],
+                  let w = bounds["Width"] as? Double, let h = bounds["Height"] as? Double
+            else { return 0 }
+            return w * h
+        }
+        return (candidates.max { area($0) < area($1) })?[kCGWindowNumber as String] as? CGWindowID
+    }
+
+    private nonisolated static func captureWindow(_ id: CGWindowID, to path: String) {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+        task.arguments = ["-l\(id)", "-o", "-x", path]
+        try? task.run()
+        task.waitUntilExit()
+        note("captured \(path) (window \(id))")
+    }
+
+    /// Click the Nth recent item the way AppKit would: a disabled item is
+    /// reported and left alone, exactly as a real click on a greyed row does
+    /// nothing. Everything else goes through the item's own target/action.
+    private func runDebugRevealRecent(_ index: Int) {
+        installStatusItem()
+        guard let menu = statusItem?.menu else { exit(70) }
+        rebuildMenu(menu)
+        let recents = menu.items.filter { $0.representedObject is URL }
+        guard let item = recents[safe: index] else {
+            FileHandle.standardError.write(Data(
+                "stage-studio: no recent item at index \(index) (have \(recents.count))\n".utf8
+            ))
+            exit(2)
+        }
+        note("recent[\(index)]: \"\(item.title)\" enabled=\(item.isEnabled)")
+        note("path: \((item.representedObject as? URL)?.path ?? "<none>")")
+        if item.isEnabled, let action = item.action, let target = item.target {
+            _ = target.perform(action, with: item)
+        } else {
+            note("item is disabled — a click on it does nothing, by design")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { NSApp.terminate(nil) }
+    }
+
     private func runDebugSurface(_ surface: String) {
+        if surface == "menu" {
+            runDebugMenu()
+            return
+        }
+
         if surface == "picker" {
             let picker = PickerController()
             self.picker = picker
@@ -357,7 +527,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             pill.show(.saved(url: Self.newestRecording(), duration: 42))
         default:
             FileHandle.standardError.write(Data(
-                "stage-studio: unknown --debug-show \(surface). Try: picker, pill-countdown, pill-recording, pill-saved\n".utf8
+                "stage-studio: unknown --debug-show \(surface). Try: menu, picker, pill-countdown, pill-recording, pill-saved\n".utf8
             ))
             exit(64)
         }
