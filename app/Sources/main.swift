@@ -26,6 +26,10 @@ func usage() -> Never {
       --debug-timeout <s>        hard teardown for interactive runs (default 25)
       --debug-midline            draw the row midline over the pill (centering check)
       --debug-freeze             hold animations at their resting phase
+
+    End-to-end (drives the real session, then quits):
+      --debug-record <id|pattern>   window to record (CGWindowID or app/title text)
+      --debug-record-seconds <s>    how long to record (default 5)
     """
     print(text)
     exit(0)
@@ -60,6 +64,16 @@ while i < argv.count {
     case "--debug-timeout":
         i += 1
         options.debugTimeout = Double(argv[safe: i] ?? "") ?? options.debugTimeout
+    case "--debug-record":
+        i += 1
+        guard i < argv.count else {
+            FileHandle.standardError.write(Data("--debug-record needs a window id or pattern\n".utf8))
+            exit(64)
+        }
+        options.debugRecord = argv[i]
+    case "--debug-record-seconds":
+        i += 1
+        options.debugRecordSeconds = Double(argv[safe: i] ?? "") ?? options.debugRecordSeconds
     case "-h", "--help":
         usage()
     default:

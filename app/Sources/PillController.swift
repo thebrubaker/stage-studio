@@ -65,6 +65,7 @@ final class PillController {
         let panel = panel ?? makePanel()
         hosting?.rootView = rootView()
         layout(panel)
+        panel.alphaValue = 1
         panel.orderFrontRegardless()
     }
 
@@ -77,6 +78,23 @@ final class PillController {
 
     func hide() {
         panel?.orderOut(nil)
+        panel?.alphaValue = 1
+    }
+
+    /// The "Saved ✓" flash doesn't blink out — it fades, so the end of a session
+    /// reads as a settling rather than a disappearance.
+    func fadeOut(duration: TimeInterval = 0.5, completion: @escaping () -> Void = {}) {
+        guard let panel, panel.isVisible else { return completion() }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            panel.animator().alphaValue = 0
+        } completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                self?.hide()
+                completion()
+            }
+        }
     }
 
     func close() {
@@ -139,6 +157,10 @@ final class PillController {
     /// frame excludes the Dock, so the pill never lands under it.
     private func layout(_ panel: PillPanel) {
         guard let hosting else { return }
+        // The pill changes width between states (a filename is longer than an
+        // elapsed clock). fittingSize is stale until SwiftUI has laid the new
+        // content out, so force the pass before trusting it.
+        hosting.layoutSubtreeIfNeeded()
         let size = hosting.fittingSize
         let screen = panel.screen ?? NSScreen.main ?? NSScreen.screens.first
         guard let visible = screen?.visibleFrame else { return }
