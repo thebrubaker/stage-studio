@@ -41,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var picker: PickerController?
     private var session: SessionController?
     private var statusItem: NSStatusItem?
+    private var control: ControlServer?
 
     nonisolated init(options: LaunchOptions) {
         self.options = options
@@ -61,6 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         session?.shutdown()
+        control?.stop()
     }
 
     // MARK: - Normal operation
@@ -83,7 +85,81 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         installStatusItem()
+        startControlServer(session: session)
         note("ready — ⌥⌘R to record")
+    }
+
+    /// The external control surface. Failing to open it must not take the app
+    /// down — the hotkey flow is still perfectly usable without it, and a hard
+    /// exit here would break the thing that already works.
+    private func startControlServer(session: SessionController) {
+        let server = ControlServer()
+        server.handler = { [weak session] request, respond in
+            guard let session else {
+                return respond(["ok": false, "error": "unavailable"])
+            }
+            AppDelegate.handle(request, session: session, respond: respond)
+        }
+        do {
+            try server.start()
+            control = server
+        } catch {
+            FileHandle.standardError.write(Data(
+                "stage-studio: control socket unavailable: \(error.localizedDescription)\n".utf8
+            ))
+        }
+    }
+
+    /// The control vocabulary. Kept static and session-parameterised so it has no
+    /// hidden state of its own.
+    private static func handle(
+        _ request: ControlRequest,
+        session: SessionController,
+        respond: @escaping ([String: Any]) -> Void
+    ) {
+        func reply(_ result: SessionResult) {
+            var payload: [String: Any] = ["ok": result.ok, "state": result.state]
+            if let output = result.output { payload["output"] = output.path }
+            if result.duration > 0 { payload["duration"] = result.duration }
+            if result.cancelled { payload["cancelled"] = true }
+            if let error = result.error { payload["error"] = error }
+            respond(payload)
+        }
+
+        switch request.command {
+        case "ping":
+            respond(["ok": true, "state": session.describe(session.phase)])
+
+        case "status":
+            respond(session.statusPayload())
+
+        case "start":
+            guard let windowId = request.int("windowId") else {
+                return respond(["ok": false, "error": "bad_request",
+                                "message": "start requires windowId"])
+            }
+            guard let window = WindowEnumerator.list()
+                .first(where: { $0.id == CGWindowID(windowId) })
+            else {
+                return respond(["ok": false, "error": "window_not_found",
+                                "message": "no on-screen window with id \(windowId)"])
+            }
+            let source: SessionSource = {
+                guard request.string("source") != "human" else { return .human }
+                return .agent(label: request.string("label") ?? "Claude")
+            }()
+            let output = request.string("output").map { URL(fileURLWithPath: $0) }
+            session.start(window: window, source: source, output: output) { reply($0) }
+
+        case "stop":
+            session.requestStop { reply($0) }
+
+        case "cancel":
+            session.requestCancel { reply($0) }
+
+        default:
+            respond(["ok": false, "error": "unknown_command", "message": request.command])
+        }
     }
 
     /// Not the interface — the app is the pill and the picker. This exists only

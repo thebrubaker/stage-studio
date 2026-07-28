@@ -9,6 +9,8 @@
 
 import { spawn } from "node:child_process";
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { connect } from "node:net";
+import { homedir } from "node:os";
 import { resolve, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -19,6 +21,95 @@ const WINDOWS_BIN = resolve(REPO_ROOT, "cmd/windows/windows");
 const RECORDER_BIN = resolve(REPO_ROOT, "cmd/recorder/recorder");
 
 const FPS = 30;
+
+// ---------------------------------------------------------------------------
+// Control surface — talking to the running Stage Studio app (DIG-793)
+//
+// Recording routes through the app by default so that EVERY recording, however
+// it was started, puts the pill on screen. That visibility is the point: an
+// agent-initiated capture the user can't see and can't kill is not something
+// that should be possible.
+//
+// The old direct-spawn path still exists behind --headless for contexts with no
+// GUI session to talk to.
+// ---------------------------------------------------------------------------
+
+const APP_PATH = "/Applications/Stage Studio.app";
+const CONTROL_SOCKET = resolve(
+  homedir(),
+  "Library/Application Support/Stage Studio/control.sock",
+);
+
+type ControlResponse = {
+  ok: boolean;
+  state?: string;
+  output?: string;
+  duration?: number;
+  cancelled?: boolean;
+  error?: string;
+  message?: string;
+  [key: string]: unknown;
+};
+
+/** One request, one response, connection closes. */
+function control(payload: Record<string, unknown>, timeoutMs = 15 * 60_000): Promise<ControlResponse> {
+  return new Promise((resolveP, reject) => {
+    const sock = connect({ path: CONTROL_SOCKET });
+    let buf = "";
+    const timer = setTimeout(() => {
+      sock.destroy();
+      reject(new Error(`control timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
+    sock.on("connect", () => sock.write(JSON.stringify(payload) + "\n"));
+    sock.on("data", (d) => (buf += d.toString()));
+    sock.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    sock.on("close", () => {
+      clearTimeout(timer);
+      const text = buf.trim();
+      if (!text) return reject(new Error("control closed without a response"));
+      try {
+        resolveP(JSON.parse(text) as ControlResponse);
+      } catch {
+        reject(new Error(`unparseable control response: ${text}`));
+      }
+    });
+  });
+}
+
+async function appIsUp(): Promise<boolean> {
+  if (!existsSync(CONTROL_SOCKET)) return false;
+  try {
+    const res = await control({ command: "ping" }, 2000);
+    return res.ok === true;
+  } catch {
+    // A socket file left behind by a crashed instance looks present but refuses
+    // connections — treat that as "not running" rather than a hard failure.
+    return false;
+  }
+}
+
+/** Bring the app up if it isn't already, and wait until it answers. */
+async function ensureApp(): Promise<void> {
+  if (await appIsUp()) return;
+  if (!existsSync(APP_PATH)) {
+    throw new Error(
+      `Stage Studio isn't installed at ${APP_PATH}. Build and install it with ` +
+        `\`pnpm run build:app\`, or use --headless to bypass the app entirely.`,
+    );
+  }
+  console.error(`[stage-studio] launching ${basename(APP_PATH)}…`);
+  spawn("open", ["-a", APP_PATH], { stdio: "ignore", detached: true }).unref();
+
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 300));
+    if (await appIsUp()) return;
+  }
+  throw new Error("Stage Studio did not come up within 15s");
+}
 
 // Exponential smoothing time constant for cursor → camera. Camera position lags
 // cursor with a ~tau half-life; smaller tau = snappier follow, larger = floatier.
@@ -50,6 +141,15 @@ type Args = {
    *  Intended for the /stage skill — gives it a window picker without depending
    *  on the bundled cmd/windows binary path. */
   listWindows: boolean;
+  /** Bypass the app and spawn the recorder directly (the pre-DIG-793 path).
+   *  For contexts with no GUI session to show a pill in. */
+  headless: boolean;
+  /** Who the pill says started this. */
+  label: string;
+  /** `agent` (default for CLI-driven recordings) or `human`. */
+  source: "agent" | "human";
+  /** Control subcommand, if the invocation was one. */
+  controlCommand?: "stop" | "cancel" | "status";
 };
 
 function parseArgs(argv: string[]): Args {
@@ -59,7 +159,15 @@ function parseArgs(argv: string[]): Args {
     workDir: resolve(REPO_ROOT, "out"),
     skipRecord: false,
     listWindows: false,
+    headless: false,
+    label: "Claude",
+    source: "agent",
   };
+  // Control subcommands: `stage-studio stop|cancel|status`.
+  if (argv[0] === "stop" || argv[0] === "cancel" || argv[0] === "status") {
+    args.controlCommand = argv[0];
+    return args;
+  }
   // Accept `stage-studio list-windows` as a bare subcommand (no leading dashes).
   // Strictly positional: it has to be the first arg. Anything else falls through
   // to the regular flag parser, including `--list-windows` for symmetry.
@@ -75,11 +183,20 @@ function parseArgs(argv: string[]): Args {
     else if (a === "--skip-record") args.skipRecord = true;
     else if (a === "--window" || a === "-w") args.window = argv[++i];
     else if (a === "--window-id") args.windowId = Number(argv[++i]);
+    else if (a === "--headless") args.headless = true;
+    else if (a === "--label") args.label = argv[++i];
+    else if (a === "--source") args.source = argv[++i] === "human" ? "human" : "agent";
     else if (a === "-h" || a === "--help") {
       console.log(`stage-studio — record a window + render polished MP4
 
+Recordings route through the Stage Studio app by default, so every recording
+shows the on-screen pill and can be stopped by hand (Esc / click / ⌥⌘R).
+
 Usage:
-  stage-studio [options]              record (default)
+  stage-studio [options]              start a recording (default)
+  stage-studio stop                   stop the running recording, print the file
+  stage-studio cancel                 abort and delete the partial file
+  stage-studio status                 print what the app is doing, as JSON
   stage-studio list-windows           print on-screen windows as JSON and exit
 
 Recording options:
@@ -93,6 +210,10 @@ Recording options:
                         app+title; default: frontmost non-terminal window)
       --window-id <N>   target specific CGWindowID (numeric). Use this when
                         you have an exact id from \`stage-studio list-windows\`.
+      --label <name>    who the pill credits for the recording (default Claude)
+      --source <who>    agent (default) or human — picks the pill's treatment
+      --headless        bypass the app: spawn the recorder directly, no pill.
+                        Only for contexts with no GUI session.
   -h, --help            this help
 
   When --duration 0 is used, the recorder PID is printed to stdout as:
@@ -329,8 +450,92 @@ async function record(args: Args, windowID: number, outputPath: string, workDir:
   return { clicksPath, t0Epoch };
 }
 
+/**
+ * Drive a recording through the running app. Returns when the outcome is real:
+ * `start` doesn't resolve until the countdown has elapsed, so a user who hits
+ * Esc during it produces a cancelled result rather than a false "recording".
+ */
+async function recordViaApp(args: Args) {
+  await ensureApp();
+
+  const windowId = args.windowId ?? (await detectWindow({ pattern: args.window })).windowId;
+  const started = await control({
+    command: "start",
+    windowId,
+    output: resolve(args.output),
+    source: args.source,
+    label: args.label,
+  });
+
+  if (!started.ok) {
+    if (started.error === "busy") {
+      // Never queue, never preempt — whoever owns the pill owns the machine.
+      console.error(
+        `[stage-studio] busy: a ${started.state} session is already running. ` +
+          `Stop it first (\`stage-studio stop\`, Esc, or ⌥⌘R).`,
+      );
+      process.exit(3);
+    }
+    if (started.cancelled) {
+      console.error(`[stage-studio] cancelled during the countdown — nothing recorded.`);
+      process.exit(4);
+    }
+    console.error(`[stage-studio] could not start: ${started.error ?? "unknown"}${started.message ? ` — ${started.message}` : ""}`);
+    process.exit(1);
+  }
+
+  console.log(`[stage-studio] recording → ${started.output}`);
+
+  if (args.duration <= 0) {
+    // Open-ended: hand control back. Stop with `stage-studio stop`, or by hand.
+    console.error(`[stage-studio] open-ended — stop with \`stage-studio stop\` (or Esc / ⌥⌘R).`);
+    return;
+  }
+
+  await new Promise((r) => setTimeout(r, args.duration * 1000));
+  const stopped = await control({ command: "stop" });
+  reportStop(stopped);
+}
+
+function reportStop(res: ControlResponse) {
+  if (res.cancelled) {
+    // The user's physical controls outrank the caller's request, and the caller
+    // is told plainly rather than being handed a missing file to puzzle over.
+    console.error(`[stage-studio] the recording was stopped by hand — no file written.`);
+    process.exit(4);
+  }
+  if (!res.ok) {
+    console.error(`[stage-studio] stop failed: ${res.error ?? "unknown"}`);
+    process.exit(1);
+  }
+  const seconds = res.duration ? ` (${res.duration.toFixed(1)}s)` : "";
+  console.log(`[stage-studio] saved ${res.output}${seconds}`);
+}
+
+async function runControlCommand(command: "stop" | "cancel" | "status") {
+  if (!(await appIsUp())) {
+    console.error(`[stage-studio] Stage Studio isn't running — nothing to ${command}.`);
+    process.exit(2);
+  }
+  const res = await control({ command });
+  if (command === "status") {
+    console.log(JSON.stringify(res, null, 2));
+    return;
+  }
+  if (command === "cancel") {
+    console.log(`[stage-studio] cancelled${res.ok ? "" : ` (${res.error})`}`);
+    return;
+  }
+  reportStop(res);
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+
+  if (args.controlCommand) {
+    await runControlCommand(args.controlCommand);
+    return;
+  }
 
   if (args.listWindows) {
     // Thin pass-through to the windows binary. Inherits stdio so callers get
@@ -341,6 +546,12 @@ async function main() {
     }
     const proc = spawn(WINDOWS_BIN, ["list"], { stdio: "inherit" });
     proc.on("close", (code) => process.exit(code ?? 1));
+    return;
+  }
+
+  // The default path: drive the app, so the recording is visible and killable.
+  if (!args.headless) {
+    await recordViaApp(args);
     return;
   }
 

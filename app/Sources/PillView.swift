@@ -22,6 +22,10 @@ func formatClock(_ seconds: TimeInterval) -> String {
 
 struct PillView: View {
     let state: PillState
+    /// Who started this session. An agent-initiated recording must be obviously
+    /// not-user-initiated at a glance — that visibility is the precondition for
+    /// ever letting an agent start one.
+    var source: SessionSource = .human
     /// Debug instrument: draws the row's true vertical midline over the pill so
     /// optical centering can be *measured* in a screenshot instead of eyeballed.
     var showMidline: Bool = false
@@ -37,24 +41,39 @@ struct PillView: View {
     /// auto-fade open while the user is reaching for the filename.
     var onHoverChanged: (Bool) -> Void = { _ in }
 
+    /// "Claude · " in the agent accent, or nothing at all for a human session.
+    private var attribution: Text {
+        guard let label = source.label else { return Text("") }
+        return Text(label).foregroundColor(Theme.agentAccent)
+            + Text(" · ").foregroundColor(Theme.textMuted)
+    }
+
     var body: some View {
         HStack(alignment: .center, spacing: Theme.pillSpacing) {
             switch state {
             case let .countdown(remaining, appName):
                 CountdownBadge(count: remaining)
-                Text("Recording \(appName)…")
-                    .font(Theme.labelFont)
-                    .foregroundStyle(Theme.textSecondary)
-                    .opticallyCentered(Theme.labelNSFont)
+                // One concatenated Text, so the attribution and the sentence
+                // share a baseline and get ink-centred once.
+                (
+                    attribution
+                        + Text("Recording \(appName)…").foregroundColor(Theme.textSecondary)
+                )
+                .font(Theme.labelFont)
+                .opticallyCentered(Theme.labelNSFont)
                 HintRow(leading: nil, key: "esc", trailing: "cancel")
 
             case let .recording(elapsed):
                 RecordingDot(freeze: freezeAnimation)
-                Text(formatClock(elapsed))
-                    .font(Theme.elapsedFont)
-                    .monospacedDigit()
-                    .foregroundStyle(Theme.textPrimary)
-                    .opticallyCentered(Theme.elapsedNSFont)
+                (
+                    attribution
+                        + Text(formatClock(elapsed))
+                        .font(Theme.elapsedFont)
+                        .foregroundColor(Theme.textPrimary)
+                )
+                .font(Theme.labelFont)
+                .monospacedDigit()
+                .opticallyCentered(Theme.labelNSFont)
                 Rectangle()
                     .fill(Theme.divider)
                     .frame(width: 1, height: 14)
@@ -75,7 +94,12 @@ struct PillView: View {
         .padding(.horizontal, Theme.pillHPadding)
         .frame(height: Theme.pillHeight)
         .background(Capsule().fill(Theme.pillFill))
-        .overlay(Capsule().strokeBorder(Theme.pillRing, lineWidth: 1))
+        .overlay(
+            Capsule().strokeBorder(
+                source.isAgent ? Theme.agentRing : Theme.pillRing,
+                lineWidth: source.isAgent ? 1.5 : 1
+            )
+        )
         .overlay(alignment: .center) {
             if showMidline {
                 Rectangle().fill(Color.green.opacity(0.9)).frame(height: 1)

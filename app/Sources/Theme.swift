@@ -82,6 +82,13 @@ enum Theme {
     static let pillFill = Color(red: 12 / 255, green: 12 / 255, blue: 14 / 255).opacity(0.94)
     static let pillRing = Color.white.opacity(0.10)
     static let recordRed = Color(red: 239 / 255, green: 68 / 255, blue: 68 / 255) // tailwind red-500
+
+    /// Agent-initiated sessions. A distinct hue from both the record dot and the
+    /// picker's selection blue, so "an agent started this" is legible at a glance
+    /// without touching the red dot — red still means "capturing right now",
+    /// whoever asked for it.
+    static let agentAccent = Color(red: 0x8b / 255, green: 0x7c / 255, blue: 0xf8 / 255)
+    static let agentRing = agentAccent.opacity(0.55)
     static let savedGreen = Color(red: 16 / 255, green: 185 / 255, blue: 129 / 255).opacity(0.9) // emerald-500/90
 
     static let textPrimary = Color.white.opacity(0.90)

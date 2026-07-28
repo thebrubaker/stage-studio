@@ -30,6 +30,30 @@ func revealInFinder(_ url: URL) {
     note("revealed \(url.lastPathComponent) in Finder")
 }
 
+/// Who asked for this recording. Drives the pill's treatment: an agent-initiated
+/// session has to be obviously distinguishable from one the user started, because
+/// "I can see it happening" is the whole basis for ever letting an agent start one.
+enum SessionSource: Equatable {
+    case human
+    case agent(label: String)
+
+    var isAgent: Bool { self != .human }
+    var label: String? {
+        if case let .agent(label) = self { return label }
+        return nil
+    }
+}
+
+/// What a control-surface caller learns about the session it asked for.
+struct SessionResult {
+    var ok: Bool
+    var state: String
+    var output: URL?
+    var duration: TimeInterval = 0
+    var cancelled: Bool = false
+    var error: String?
+}
+
 @MainActor
 final class SessionController {
     enum Phase {
@@ -59,6 +83,16 @@ final class SessionController {
     private var countdownRemaining = 0
     private var timer: Timer?
     private var savedDismissWork: DispatchWorkItem?
+
+    /// Who started the live session, and where they asked for the file.
+    private(set) var source: SessionSource = .human
+    private var requestedOutput: URL?
+
+    /// Control-surface callers block on these. A `start` isn't answered until the
+    /// countdown has actually elapsed, so the caller learns "recording" or
+    /// "cancelled" — never an optimistic "started" the user then vetoed.
+    private var startWaiter: ((SessionResult) -> Void)?
+    private var stopWaiter: ((SessionResult) -> Void)?
 
     /// Mockup's 3·2·1.
     private let countdownSeconds = 3
@@ -105,16 +139,104 @@ final class SessionController {
     }
 
     /// Enter the flow at the moment a window has been chosen — same path the
-    /// picker takes, minus the picking.
-    func start(window: CapturableWindow) {
-        guard phase == .idle else { return }
+    /// picker takes, minus the picking. Used by the hotkey picker, the debug
+    /// harness, and the control surface alike, so an agent-started session runs
+    /// exactly the machinery a human-started one does.
+    ///
+    /// `completion` fires once the outcome is real: recording underway, or the
+    /// user cancelled during the countdown.
+    func start(
+        window: CapturableWindow,
+        source: SessionSource = .human,
+        output: URL? = nil,
+        completion: ((SessionResult) -> Void)? = nil
+    ) {
+        guard phase == .idle else {
+            // Never queue, never preempt — a live session belongs to whoever has
+            // the pill, and silently taking it over would be exactly the sort of
+            // thing the user must never have to worry about.
+            completion?(SessionResult(
+                ok: false, state: describe(phase),
+                error: "busy"
+            ))
+            return
+        }
+        self.source = source
+        self.requestedOutput = output
+        self.startWaiter = completion
         beginCountdown(for: window)
     }
 
-    /// Stop from outside (debug harness / status menu).
-    func requestStop() { stop() }
+    /// Stop from outside (control surface / debug harness / status menu).
+    func requestStop(completion: ((SessionResult) -> Void)? = nil) {
+        guard phase == .countdown || phase == .recording else {
+            completion?(SessionResult(ok: false, state: describe(phase), error: "not_recording"))
+            return
+        }
+        if phase == .countdown {
+            // Stopping during the countdown is a cancel: nothing has been written.
+            stopWaiter = completion
+            cancelCountdown()
+            return
+        }
+        stopWaiter = completion
+        stop()
+    }
+
+    /// Abort and leave nothing behind.
+    func requestCancel(completion: ((SessionResult) -> Void)? = nil) {
+        guard phase != .idle else {
+            completion?(SessionResult(ok: false, state: "idle", error: "not_recording"))
+            return
+        }
+        stopWaiter = completion
+        if phase == .recording {
+            // endSession's recorder.cancel() removes the partial file.
+            endSession()
+        } else {
+            cancelCountdown()
+        }
+    }
 
     var outputURL: URL? { recorder.outputURL }
+
+    /// Snapshot for the control surface's `status` command.
+    func statusPayload() -> [String: Any] {
+        var payload: [String: Any] = [
+            "ok": true,
+            "state": describe(phase),
+            "source": source.isAgent ? "agent" : "human",
+        ]
+        if let label = source.label { payload["label"] = label }
+        if let target { payload["windowId"] = Int(target.id); payload["app"] = target.app }
+        if let output = recorder.outputURL { payload["output"] = output.path }
+        if phase == .recording { payload["elapsed"] = recorder.elapsed }
+        return payload
+    }
+
+    func describe(_ phase: Phase) -> String {
+        switch phase {
+        case .idle: return "idle"
+        case .picking: return "picking"
+        case .countdown: return "countdown"
+        case .recording: return "recording"
+        case .saved: return "saved"
+        }
+    }
+
+    // MARK: - Waiters
+
+    private func resolveStart(_ result: SessionResult) {
+        let waiter = startWaiter
+        startWaiter = nil
+        waiter?(result)
+    }
+
+    private func resolveStop(_ result: SessionResult) {
+        let waiter = stopWaiter
+        stopWaiter = nil
+        waiter?(result)
+    }
 
     // MARK: - Picking
 
@@ -130,9 +252,12 @@ final class SessionController {
         phase = .countdown
         countdownRemaining = countdownSeconds
 
-        // Esc becomes ours for exactly as long as the pill is up.
+        // Esc becomes ours for exactly as long as the pill is up — for agent
+        // sessions just as much as human ones. The countdown IS the user's veto
+        // window, so it has to run identically no matter who asked.
         HotkeyManager.shared.register(.escape) { [weak self] in self?.escape() }
 
+        pill.source = source
         pill.show(.countdown(remaining: countdownRemaining, appName: window.app))
         startTimer(interval: 1) { [weak self] in self?.tickCountdown() }
     }
@@ -157,20 +282,29 @@ final class SessionController {
 
     private func beginRecording() {
         guard let target else { return endSession() }
-        let output = Recorder.defaultOutputURL()
+        let output = requestedOutput ?? Recorder.defaultOutputURL()
 
         recorder.onExit = { [weak self] status in self?.recorderExited(status: status) }
         do {
+            try FileManager.default.createDirectory(
+                at: output.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
             try recorder.start(windowID: target.id, output: output)
         } catch {
             note("failed to start recorder: \(error.localizedDescription)")
             NSSound.beep()
+            resolveStart(SessionResult(
+                ok: false, state: "idle", error: "recorder_failed",
+            ))
             return endSession()
         }
 
         phase = .recording
         pill.update(.recording(elapsed: 0))
         startTimer(interval: 0.5) { [weak self] in self?.tickElapsed() }
+        // The caller has been holding since `start` — the countdown survived, so
+        // capture is genuinely underway.
+        resolveStart(SessionResult(ok: true, state: "recording", output: output))
     }
 
     private func tickElapsed() {
@@ -201,6 +335,7 @@ final class SessionController {
         pill.update(.saved(url: output, duration: duration))
         HotkeyManager.shared.unregister(.escape)
         scheduleSavedDismiss()
+        resolveStop(SessionResult(ok: true, state: "saved", output: output, duration: duration))
     }
 
     private func scheduleSavedDismiss() {
@@ -238,14 +373,21 @@ final class SessionController {
 
     // MARK: - Teardown
 
-    /// Every exit path funnels here, so Esc can never stay hijacked past the pill.
+    /// Every exit path funnels here, so Esc can never stay hijacked past the pill
+    /// — and no control-surface caller is left hanging on a session that ended.
     private func endSession() {
         stopTimer()
         recorder.cancel()
         HotkeyManager.shared.unregister(.escape)
         pill.hide()
         target = nil
+        requestedOutput = nil
+        source = .human
         phase = .idle
+        // Whoever asked for this session learns the user ended it. This is how a
+        // caller finds out its recording was overridden rather than completed.
+        resolveStart(SessionResult(ok: false, state: "idle", cancelled: true, error: "cancelled"))
+        resolveStop(SessionResult(ok: true, state: "idle", cancelled: true))
     }
 
     /// Called on app termination — never leave a recorder orphaned.

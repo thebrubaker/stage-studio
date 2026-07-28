@@ -39,6 +39,9 @@ final class PillController {
     var onReveal: (URL) -> Void = { _ in }
     var onHoverChanged: (Bool) -> Void = { _ in }
 
+    /// Set before `show` — decides whether the pill wears its agent treatment.
+    var source: SessionSource = .human
+
     /// Invalidates in-flight fades. Without it, a fade that gets cancelled
     /// mid-flight still runs its completion handler and hides the pill.
     private var fadeToken = 0
@@ -130,6 +133,7 @@ final class PillController {
     private func rootView() -> PillView {
         PillView(
             state: state,
+            source: source,
             showMidline: showMidline,
             freezeAnimation: freezeAnimation,
             forceHover: forceHover,
