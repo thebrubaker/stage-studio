@@ -188,21 +188,21 @@ Microphone grants the recorder already needs.
 **Verifying a surface without recording anything:**
 
 ```bash
-APP=app/build/StageStudio.app/Contents/MacOS/StageStudio
+APP="app/build/Stage Studio.app/Contents/MacOS/StageStudio"
 
 # summon a surface, screenshot it, quit — self-cleaning
-$APP --debug-show picker --debug-capture /tmp/picker.png
-$APP --debug-show pill-recording --debug-capture /tmp/pill.png
-$APP --debug-show pill-countdown --debug-midline   # midline = centering check
-$APP --debug-show pill-saved --debug-hover         # filename's click affordance
-$APP --debug-reveal                                # exercise the Finder reveal
+"$APP" --debug-show picker --debug-capture /tmp/picker.png
+"$APP" --debug-show pill-recording --debug-capture /tmp/pill.png
+"$APP" --debug-show pill-countdown --debug-midline   # midline = centering check
+"$APP" --debug-show pill-saved --debug-hover         # filename's click affordance
+"$APP" --debug-reveal                                # exercise the Finder reveal
 
 # the agent treatment — violet ring + "Claude · " attribution
-$APP --debug-show pill-countdown --debug-agent --debug-midline
-$APP --debug-show pill-recording --debug-agent --debug-label "Claude"
+"$APP" --debug-show pill-countdown --debug-agent --debug-midline
+"$APP" --debug-show pill-recording --debug-agent --debug-label "Claude"
 
 # drive the whole session against one window, then quit
-$APP --debug-record "Safari" --debug-record-seconds 5
+"$APP" --debug-record "Safari" --debug-record-seconds 5
 ```
 
 `app/tools/inkbox` measures where text ink actually sits relative to a row's
