@@ -332,6 +332,10 @@ final class SessionController {
         }
 
         phase = .saved
+        // Save-time is the only place history is written: every session — hotkey,
+        // CLI, agent — arrives here with a file that exists on disk, and a session
+        // that never got here never made one.
+        RecentRecordings.shared.record(output)
         pill.update(.saved(url: output, duration: duration))
         HotkeyManager.shared.unregister(.escape)
         scheduleSavedDismiss()
