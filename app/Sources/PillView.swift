@@ -181,7 +181,7 @@ private struct HintRow: View {
                     .foregroundStyle(Theme.textMuted)
                     .opticallyCentered(Theme.hintNSFont)
             }
-            Kbd(label: key)
+            KbdKey(text: key)
             if let trailing {
                 Text(trailing)
                     .font(Theme.hintFont)
@@ -190,21 +190,5 @@ private struct HintRow: View {
             }
         }
         .pillRowItem()
-    }
-}
-
-private struct Kbd: View {
-    let label: String
-    private static let chipHeight: CGFloat = 15
-
-    var body: some View {
-        Text(label)
-            .font(Theme.kbdFont)
-            .foregroundStyle(Theme.textFaint)
-            .opticallyCentered(Theme.kbdNSFont, rowHeight: Self.chipHeight)
-            .padding(.horizontal, 4)
-            .background(RoundedRectangle(cornerRadius: 3.5).fill(Theme.kbdFill))
-            .overlay(RoundedRectangle(cornerRadius: 3.5).strokeBorder(Theme.kbdBorder, lineWidth: 1))
-            .pillRowItem()
     }
 }

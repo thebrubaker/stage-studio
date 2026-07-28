@@ -20,12 +20,49 @@ enum Theme {
     /// Distance from the bottom of the screen's visible frame, mockup's `bottom-[4%]`.
     static let pillBottomFraction: CGFloat = 0.04
 
+    // MARK: Picker metrics
+
+    static let pickerWidth: CGFloat = 600
+    static let pickerColumns = 3
+    static let pickerCorner: CGFloat = 16
+    static let pickerPadding: CGFloat = 12
+    static let pickerGridGap: CGFloat = 8
+    static let pickerCellPadding: CGFloat = 6
+    static let pickerThumbAspect: CGFloat = 16.0 / 10.0
+    static let pickerIconSize: CGFloat = 24
+    static let pickerLabelGap: CGFloat = 6
+    /// Fixed so the cell height is a computed constant rather than whatever the
+    /// two text lines happen to measure — cells in a row must be uniform.
+    static let pickerLabelHeight: CGFloat = 28
+    /// Cap the grid so a busy desktop scrolls instead of growing a panel taller
+    /// than the screen. Clamped to WHOLE rows: a row sliced in half by the panel
+    /// edge reads as a rendering bug, not as "there's more below".
+    static let pickerVisibleRows = 3
+
+    static var pickerThumbWidth: CGFloat {
+        let gutters = 2 * pickerPadding + CGFloat(pickerColumns - 1) * pickerGridGap
+        return (pickerWidth - gutters) / CGFloat(pickerColumns) - 2 * pickerCellPadding
+    }
+
+    static var pickerCellHeight: CGFloat {
+        (pickerThumbWidth / pickerThumbAspect) + pickerLabelGap + pickerLabelHeight
+            + 2 * pickerCellPadding
+    }
+
+    static var pickerGridMaxHeight: CGFloat {
+        let rows = CGFloat(pickerVisibleRows)
+        return rows * pickerCellHeight + (rows - 1) * pickerGridGap + 2 * pickerPadding
+    }
+    static let pickerShadowMargin: CGFloat = 40
+
     // MARK: Type
 
     static let labelSize: CGFloat = 13
     static let elapsedSize: CGFloat = 13
     static let hintSize: CGFloat = 11
     static let kbdSize: CGFloat = 10
+    static let kbdGlyphSize: CGFloat = 9
+    static let kbdChipHeight: CGFloat = 15
 
     static let labelFont = Font.system(size: labelSize, weight: .medium)
     static let labelNSFont = NSFont.systemFont(ofSize: labelSize, weight: .medium)
@@ -55,6 +92,16 @@ enum Theme {
     static let kbdBorder = Color.white.opacity(0.15)
     static let kbdFill = Color.white.opacity(0.06)
     static let divider = Color.white.opacity(0.15)
+
+    /// Picker. The panel is a real NSVisualEffectView; this tint sits on top of
+    /// it to reach the mockup's rgba(28,28,32,0.92) darkness without giving up
+    /// the live blur underneath.
+    static let pickerTint = Color(red: 28 / 255, green: 28 / 255, blue: 32 / 255).opacity(0.72)
+    static let pickerBorder = Color.white.opacity(0.10)
+    static let pickerAccent = Color(red: 0x4f / 255, green: 0x8e / 255, blue: 0xf7 / 255)
+    static let pickerSelectedFill = Color.white.opacity(0.10)
+    static let pickerHoverFill = Color.white.opacity(0.05)
+    static let pickerFooterRule = Color.white.opacity(0.07)
 }
 
 // MARK: - Optical vertical centering

@@ -6,6 +6,12 @@
 
 import AppKit
 
+extension Array {
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
+    }
+}
+
 func usage() -> Never {
     let text = """
     stage-studio hotkey recorder
@@ -14,9 +20,12 @@ func usage() -> Never {
       StageStudio [--debug-show <surface>] [--debug-midline] [--debug-freeze]
 
     Debug flags (summon a surface deterministically, no hotkey / no recording):
-      --debug-show <surface>  picker | pill-countdown | pill-recording | pill-saved
-      --debug-midline         draw the row midline over the pill (centering check)
-      --debug-freeze          hold animations at their resting phase
+      --debug-show <surface>     picker | pill-countdown | pill-recording | pill-saved
+      --debug-capture <png>      screenshot the surface, then quit (self-cleaning)
+      --debug-capture-delay <s>  settle time before the shot (default 1.8)
+      --debug-timeout <s>        hard teardown for interactive runs (default 25)
+      --debug-midline            draw the row midline over the pill (centering check)
+      --debug-freeze             hold animations at their resting phase
     """
     print(text)
     exit(0)
@@ -38,6 +47,19 @@ while i < argv.count {
         options.debugMidline = true
     case "--debug-freeze":
         options.debugFreeze = true
+    case "--debug-capture":
+        i += 1
+        guard i < argv.count else {
+            FileHandle.standardError.write(Data("--debug-capture needs an output path\n".utf8))
+            exit(64)
+        }
+        options.debugCapture = argv[i]
+    case "--debug-capture-delay":
+        i += 1
+        options.debugCaptureDelay = Double(argv[safe: i] ?? "") ?? options.debugCaptureDelay
+    case "--debug-timeout":
+        i += 1
+        options.debugTimeout = Double(argv[safe: i] ?? "") ?? options.debugTimeout
     case "-h", "--help":
         usage()
     default:
