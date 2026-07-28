@@ -67,7 +67,7 @@ macOS requires four TCC permissions for stage-studio to work. **Grant them all t
 
 ---
 
-## Two ways to use it
+## Three ways to use it
 
 ### 1. From a Claude Code chat (the intended UX)
 
@@ -102,6 +102,62 @@ bun run cli --duration 0 --window-id 8387 --output ./demo.mp4
 ```
 
 Listen for the **Tink** sound — that's recording start. **Pop** is recording stop.
+
+### 3. The hotkey app (no Claude session needed)
+
+The capture pipeline is solid, but starting a recording used to require a Claude
+session — so it didn't get reached for. `app/` is a standalone native front door
+onto the *same* recorder. The Claude and CLI flows are untouched.
+
+```bash
+pnpm run build:app
+open app/build/StageStudio.app     # or run the binary inside for logs on stdout
+```
+
+It's an agent app (`LSUIElement`) — no Dock icon, no window until you summon one.
+There's a small menu-bar item, but that's a quit escape hatch, not the interface.
+
+**The flow:**
+
+| Step | What you see |
+|------|--------------|
+| `⌥⌘R` | Centered picker panel — live thumbnails of every on-screen window |
+| `←→↑↓` / mouse | Move the selection |
+| `↩` or click | Pick it |
+| — | A pill appears bottom-center and counts down **3 · 2 · 1**, naming the app |
+| — | Same pill flips to recording: red dot, elapsed time, **Stop** |
+| Stop / `esc` / `⌥⌘R` | Recorder finalizes, pill flashes `Saved ✓ <file> · <duration>`, fades |
+
+Output lands at `~/Desktop/recording-<timestamp>.mp4`.
+
+`esc` cancels at any point. Cancelling the countdown writes nothing at all;
+cancelling a recording stops the recorder and deletes the partial file.
+
+**On `esc`:** it's a global hotkey, so it's grabbed from every other app while
+it's registered — which is why it's registered *only* for the seconds a pill is
+on screen and released in every exit path. Outside a session, `esc` is yours.
+
+Both hotkeys use Carbon's `RegisterEventHotKey`, which needs **no Accessibility
+permission** — the app adds no permission types beyond the Screen Recording and
+Microphone grants the recorder already needs.
+
+**Verifying a surface without recording anything:**
+
+```bash
+APP=app/build/StageStudio.app/Contents/MacOS/StageStudio
+
+# summon a surface, screenshot it, quit — self-cleaning
+$APP --debug-show picker --debug-capture /tmp/picker.png
+$APP --debug-show pill-recording --debug-capture /tmp/pill.png
+$APP --debug-show pill-countdown --debug-midline   # midline = centering check
+
+# drive the whole session against one window, then quit
+$APP --debug-record "Safari" --debug-record-seconds 5
+```
+
+`app/tools/inkbox` measures where text ink actually sits relative to a row's
+midline in a screenshot, so "optically centered" stays a number rather than an
+impression.
 
 #### CLI reference
 
@@ -195,6 +251,11 @@ This repo contains the trajectory of a few earlier attempts, kept as reference:
 - **No pause.** Stop and re-record covers the same need with less mechanism.
 - **X / hard kill on the recorder loses the recording.** SIGKILL doesn't give AVAssetWriter time to finalize the MP4. Stop via "say stop to Claude" or `kill -TERM <recorder-pid>`, which traps cleanly. Documented gap.
 - **Mac-only, single display, no webcam, no system audio (mic only).**
+- **The hotkey app is unsigned and locates the recorder by relative path.** It
+  expects to live at `<repo>/app/build/StageStudio.app`; set `STAGE_STUDIO_ROOT`
+  if you move it. No signing/notarization — single-user local phase.
+- **The hotkey app's hotkey is hardcoded to `⌥⌘R`.** No settings UI; if another
+  app already owns that combination, registration fails and it says so on stderr.
 
 ---
 
@@ -203,6 +264,11 @@ This repo contains the trajectory of a few earlier attempts, kept as reference:
 ```
 stage-studio/
 ├── .claude/skills/stage-studio/  Claude skill for the chat-driven flow
+├── app/                       Hotkey recorder — LSUIElement agent app (Swift)
+│   ├── Sources/               main, AppDelegate, picker, pill, session, hotkeys
+│   ├── Resources/Info.plist   LSUIElement, mic usage string
+│   ├── tools/inkbox/          Measures text ink vs. a row midline in a shot
+│   └── build.sh               → build/StageStudio.app (unsigned, ad-hoc signed)
 ├── assets/                    Default background image
 ├── cmd/
 │   ├── clicks/                CGEventTap mouse capture (Swift)
