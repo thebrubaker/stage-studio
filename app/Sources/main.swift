@@ -26,6 +26,8 @@ func usage() -> Never {
       --debug-timeout <s>        hard teardown for interactive runs (default 25)
       --debug-midline            draw the row midline over the pill (centering check)
       --debug-freeze             hold animations at their resting phase
+      --debug-hover              force the saved filename's hover affordance on
+      --debug-reveal             reveal the newest recording in Finder, then quit
 
     End-to-end (drives the real session, then quits):
       --debug-record <id|pattern>   window to record (CGWindowID or app/title text)
@@ -51,6 +53,10 @@ while i < argv.count {
         options.debugMidline = true
     case "--debug-freeze":
         options.debugFreeze = true
+    case "--debug-hover":
+        options.debugHover = true
+    case "--debug-reveal":
+        options.debugReveal = true
     case "--debug-capture":
         i += 1
         guard i < argv.count else {

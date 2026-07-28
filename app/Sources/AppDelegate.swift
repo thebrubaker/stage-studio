@@ -27,6 +27,11 @@ struct LaunchOptions {
     /// case-insensitive substring of app+title) and quit when it's saved.
     var debugRecord: String?
     var debugRecordSeconds: Double = 5
+    /// Force the saved pill's filename into its hover treatment, so the click
+    /// affordance can be screenshotted without parking a pointer on the pill.
+    var debugHover = false
+    /// Exercise the Finder-reveal call directly, then quit.
+    var debugReveal = false
 }
 
 @MainActor
@@ -42,7 +47,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if let surface = options.debugShow {
+        if options.debugReveal {
+            revealInFinder(Self.newestRecording())
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { NSApp.terminate(nil) }
+        } else if let surface = options.debugShow {
             runDebugSurface(surface)
         } else if let target = options.debugRecord {
             runEndToEnd(target: target)
@@ -189,6 +197,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         note("captured \(path) (region \(region))")
     }
 
+    /// The debug saved-pill points at a REAL file when one exists, so its click
+    /// target is actually clickable rather than a dead path.
+    private static func newestRecording() -> URL {
+        let fm = FileManager.default
+        let desktop = fm.urls(for: .desktopDirectory, in: .userDomainMask).first
+        let candidates = desktop.flatMap {
+            try? fm.contentsOfDirectory(
+                at: $0, includingPropertiesForKeys: [.contentModificationDateKey]
+            )
+        } ?? []
+        let newest = candidates
+            .filter { $0.lastPathComponent.hasPrefix("recording-") && $0.pathExtension == "mp4" }
+            .max { a, b in
+                let da = (try? a.resourceValues(forKeys: [.contentModificationDateKey]))?
+                    .contentModificationDate ?? .distantPast
+                let db = (try? b.resourceValues(forKeys: [.contentModificationDateKey]))?
+                    .contentModificationDate ?? .distantPast
+                return da < db
+            }
+        return newest ?? URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Desktop/recording-example.mp4")
+    }
+
     private func runDebugSurface(_ surface: String) {
         if surface == "picker" {
             let picker = PickerController()
@@ -210,9 +241,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let pill = PillController(showMidline: options.debugMidline, freezeAnimation: options.debugFreeze)
+        let pill = PillController(
+            showMidline: options.debugMidline,
+            freezeAnimation: options.debugFreeze,
+            forceHover: options.debugHover
+        )
         self.pill = pill
         pill.onStop = { note("stop tapped") }
+        // The real reveal call — not a stand-in — so clicking the filename in a
+        // debug surface proves the shipping path.
+        pill.onReveal = { url in revealInFinder(url) }
+        pill.onHoverChanged = { note("pointer \($0 ? "entered" : "left") the pill") }
 
         switch surface {
         case "pill-countdown":
@@ -220,7 +259,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "pill-recording":
             pill.show(.recording(elapsed: 42))
         case "pill-saved":
-            pill.show(.saved(filename: "linear-demo.mp4", duration: 42))
+            pill.show(.saved(url: Self.newestRecording(), duration: 42))
         default:
             FileHandle.standardError.write(Data(
                 "stage-studio: unknown --debug-show \(surface). Try: picker, pill-countdown, pill-recording, pill-saved\n".utf8

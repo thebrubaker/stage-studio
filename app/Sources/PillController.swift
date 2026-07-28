@@ -34,13 +34,21 @@ final class PillController {
 
     private let showMidline: Bool
     private let freezeAnimation: Bool
+    private let forceHover: Bool
     var onStop: () -> Void = {}
+    var onReveal: (URL) -> Void = { _ in }
+    var onHoverChanged: (Bool) -> Void = { _ in }
+
+    /// Invalidates in-flight fades. Without it, a fade that gets cancelled
+    /// mid-flight still runs its completion handler and hides the pill.
+    private var fadeToken = 0
 
     private(set) var state: PillState = .countdown(remaining: 3, appName: "")
 
-    init(showMidline: Bool = false, freezeAnimation: Bool = false) {
+    init(showMidline: Bool = false, freezeAnimation: Bool = false, forceHover: Bool = false) {
         self.showMidline = showMidline
         self.freezeAnimation = freezeAnimation
+        self.forceHover = forceHover
     }
 
     /// CGWindowID of the live pill panel — printed in debug mode so a screenshot
@@ -85,15 +93,29 @@ final class PillController {
     /// reads as a settling rather than a disappearance.
     func fadeOut(duration: TimeInterval = 0.5, completion: @escaping () -> Void = {}) {
         guard let panel, panel.isVisible else { return completion() }
+        fadeToken += 1
+        let token = fadeToken
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             panel.animator().alphaValue = 0
         } completionHandler: { [weak self] in
             MainActor.assumeIsolated {
-                self?.hide()
+                guard let self, token == self.fadeToken else { return }
+                self.hide()
                 completion()
             }
+        }
+    }
+
+    /// Catch a fade that has already started — the user reached for the pill just
+    /// as it began to go. Snaps back to full opacity and voids the pending hide.
+    func cancelFade() {
+        guard let panel, panel.isVisible else { return }
+        fadeToken += 1
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            panel.animator().alphaValue = 1
         }
     }
 
@@ -110,7 +132,10 @@ final class PillController {
             state: state,
             showMidline: showMidline,
             freezeAnimation: freezeAnimation,
-            onStop: { [weak self] in self?.onStop() }
+            forceHover: forceHover,
+            onStop: { [weak self] in self?.onStop() },
+            onReveal: { [weak self] url in self?.onReveal(url) },
+            onHoverChanged: { [weak self] hovering in self?.onHoverChanged(hovering) }
         )
     }
 

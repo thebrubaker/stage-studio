@@ -14,6 +14,22 @@
 import AppKit
 import Foundation
 
+/// Reveal in Finder rather than open: the point of a recording is usually to drag
+/// it somewhere, and Finder-with-the-file-selected is that landing.
+///
+/// Top-level (not a method) so the debug path exercises the SHIPPING call rather
+/// than a copy of it.
+@MainActor
+func revealInFinder(_ url: URL) {
+    guard FileManager.default.fileExists(atPath: url.path) else {
+        note("reveal: \(url.path) is gone")
+        NSSound.beep()
+        return
+    }
+    NSWorkspace.shared.activateFileViewerSelecting([url])
+    note("revealed \(url.lastPathComponent) in Finder")
+}
+
 @MainActor
 final class SessionController {
     enum Phase {
@@ -52,6 +68,8 @@ final class SessionController {
     init(pill: PillController) {
         self.pill = pill
         self.pill.onStop = { [weak self] in self?.stop() }
+        self.pill.onReveal = { [weak self] url in self?.reveal(url) }
+        self.pill.onHoverChanged = { [weak self] hovering in self?.savedHoverChanged(hovering) }
         picker.onPick = { [weak self] window in self?.beginCountdown(for: window) }
         picker.onCancel = { [weak self] in self?.phase = .idle }
     }
@@ -180,13 +198,33 @@ final class SessionController {
         }
 
         phase = .saved
-        pill.update(.saved(filename: output.lastPathComponent, duration: duration))
+        pill.update(.saved(url: output, duration: duration))
         HotkeyManager.shared.unregister(.escape)
+        scheduleSavedDismiss()
+    }
 
+    private func scheduleSavedDismiss() {
+        savedDismissWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.dismissSaved() }
         savedDismissWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + savedLinger, execute: work)
     }
+
+    /// The saved pill carries a click target, so it must not fade out from under
+    /// a user who is reaching for it. Pointer on the pill = the clock stops; when
+    /// the pointer leaves, the full linger starts over.
+    private func savedHoverChanged(_ hovering: Bool) {
+        guard phase == .saved else { return }
+        if hovering {
+            savedDismissWork?.cancel()
+            savedDismissWork = nil
+            pill.cancelFade()
+        } else {
+            scheduleSavedDismiss()
+        }
+    }
+
+    private func reveal(_ url: URL) { revealInFinder(url) }
 
     private func dismissSaved() {
         savedDismissWork?.cancel()

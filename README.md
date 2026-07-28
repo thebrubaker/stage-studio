@@ -127,8 +127,13 @@ There's a small menu-bar item, but that's a quit escape hatch, not the interface
 | — | A pill appears bottom-center and counts down **3 · 2 · 1**, naming the app |
 | — | Same pill flips to recording: red dot, elapsed time, **Stop** |
 | Stop / `esc` / `⌥⌘R` | Recorder finalizes, pill flashes `Saved ✓ <file> · <duration>`, fades |
+| Click the filename | Reveals the recording in Finder, selected and ready to drag |
 
 Output lands at `~/Desktop/recording-<timestamp>.mp4`.
+
+The saved pill fades after ~4s, but **hovering it stops the clock** — including
+catching a fade that has already started — so the click target can't disappear
+while you're reaching for it. Moving off restarts the timer.
 
 `esc` cancels at any point. Cancelling the countdown writes nothing at all;
 cancelling a recording stops the recorder and deletes the partial file.
@@ -150,6 +155,8 @@ APP=app/build/StageStudio.app/Contents/MacOS/StageStudio
 $APP --debug-show picker --debug-capture /tmp/picker.png
 $APP --debug-show pill-recording --debug-capture /tmp/pill.png
 $APP --debug-show pill-countdown --debug-midline   # midline = centering check
+$APP --debug-show pill-saved --debug-hover         # filename's click affordance
+$APP --debug-reveal                                # exercise the Finder reveal
 
 # drive the whole session against one window, then quit
 $APP --debug-record "Safari" --debug-record-seconds 5

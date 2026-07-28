@@ -10,8 +10,9 @@ enum PillState: Equatable {
     case countdown(remaining: Int, appName: String)
     /// Capturing. Red dot + elapsed + Stop.
     case recording(elapsed: TimeInterval)
-    /// Confirmation flash, then fades.
-    case saved(filename: String, duration: TimeInterval)
+    /// Confirmation flash, then fades. Carries the full URL, not just a name:
+    /// the filename is clickable and reveals the file in Finder.
+    case saved(url: URL, duration: TimeInterval)
 }
 
 func formatClock(_ seconds: TimeInterval) -> String {
@@ -26,7 +27,15 @@ struct PillView: View {
     var showMidline: Bool = false
     /// Debug: hold animations at their resting phase so screenshots are deterministic.
     var freezeAnimation: Bool = false
+    /// Debug: force the filename's hover treatment on, so the affordance can be
+    /// screenshotted without a real pointer parked on the pill.
+    var forceHover: Bool = false
     var onStop: () -> Void = {}
+    /// Reveal the finished file in Finder, selected and ready to drag.
+    var onReveal: (URL) -> Void = { _ in }
+    /// Pointer entered/left the pill body. The session uses this to hold the
+    /// auto-fade open while the user is reaching for the filename.
+    var onHoverChanged: (Bool) -> Void = { _ in }
 
     var body: some View {
         HStack(alignment: .center, spacing: Theme.pillSpacing) {
@@ -53,15 +62,14 @@ struct PillView: View {
                 StopButton(action: onStop)
                 HintRow(leading: "or", key: "esc", trailing: nil)
 
-            case let .saved(filename, duration):
+            case let .saved(url, duration):
                 SavedCheck()
-                (
-                    Text("Saved ").foregroundColor(Color.white.opacity(0.85))
-                        + Text(filename).font(Theme.elapsedFont).foregroundColor(Color.white.opacity(0.5))
-                        + Text(" · \(formatClock(duration))").foregroundColor(Color.white.opacity(0.40))
+                SavedLabel(
+                    url: url,
+                    duration: duration,
+                    forceHover: forceHover,
+                    onReveal: onReveal
                 )
-                .font(Theme.labelFont)
-                .opticallyCentered(Theme.labelNSFont)
             }
         }
         .padding(.horizontal, Theme.pillHPadding)
@@ -73,6 +81,10 @@ struct PillView: View {
                 Rectangle().fill(Color.green.opacity(0.9)).frame(height: 1)
             }
         }
+        // Hover is tracked on the capsule, not the shadow margin — the margin is
+        // click-through, so treating it as "on the pill" would hold the fade open
+        // from a pointer that isn't really there.
+        .onHover { onHoverChanged($0) }
         .shadow(color: .black.opacity(0.45), radius: 16, y: 6)
         .shadow(color: .black.opacity(0.25), radius: 3, y: 1)
         .padding(Theme.pillShadowMargin)
@@ -149,6 +161,64 @@ private struct StopButton: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .pillRowItem()
+    }
+}
+
+/// "Saved <filename> · 0:42", where the filename is a live target that reveals
+/// the recording in Finder — selected, ready to drag somewhere.
+///
+/// The three runs share one baseline (an `.firstTextBaseline` HStack) rather than
+/// being centered independently: they're one sentence, and independent centering
+/// would stagger them because SF Pro and SF Mono have different cap heights. The
+/// whole group is then ink-centered once, from the label font.
+private struct SavedLabel: View {
+    let url: URL
+    let duration: TimeInterval
+    let forceHover: Bool
+    let onReveal: (URL) -> Void
+
+    @State private var hovering = false
+
+    private var isHot: Bool { hovering || forceHover }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
+            Text("Saved ")
+                .font(Theme.labelFont)
+                .foregroundStyle(Color.white.opacity(0.85))
+
+            Text(url.lastPathComponent)
+                .font(Theme.elapsedFont)
+                .foregroundStyle(Color.white.opacity(isHot ? 0.95 : 0.5))
+                .underline(isHot)
+                // A tight text frame is a mean click target; pad it out without
+                // disturbing the shared baseline.
+                .padding(.vertical, 4)
+                .padding(.horizontal, 2)
+                .contentShape(Rectangle())
+                .onHover { hovering in
+                    self.hovering = hovering
+                    if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                }
+                .onTapGesture { onReveal(url) }
+                .help("Reveal in Finder")
+
+            Text(" · \(formatClock(duration))")
+                .font(Theme.labelFont)
+                .foregroundStyle(Color.white.opacity(0.40))
+        }
+        .alignmentGuide(VerticalAlignment.center) { d in
+            d[.firstTextBaseline] - Theme.labelNSFont.capHeight / 2
+        }
+        .frame(height: Theme.pillHeight)
+        .onDisappear {
+            // The pill can vanish out from under a hovering pointer (fade, Esc,
+            // a new session). Without this the pointing-hand cursor leaks.
+            if hovering {
+                NSCursor.pop()
+                hovering = false
+            }
+        }
     }
 }
 
