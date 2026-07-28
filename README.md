@@ -13,12 +13,16 @@ Replaces Screen Studio ($89/yr) and OBS (heavy) for one specific need: "I want a
 ```bash
 # in any Claude Code session, with the stage-studio skill loaded:
 you:    let's record a clip of this Linear ticket
-claude: [identifies your Linear window, starts recording]
+claude: [identifies your Linear window, asks the app to record it]
+        [a pill appears bottom-center: "Claude · Recording Linear…" 3 · 2 · 1]
         "Recording. Say stop when done."
 you:    [demo your thing, then come back to claude]
         stop
 claude: "Done. out/linear-dig228-20260516-105132.mp4"
 ```
+
+The pill is not decoration. Any recording — yours or Claude's — is visible while it
+happens and dies on `esc`. That's the precondition for letting an agent start one.
 
 Output:
 
@@ -54,20 +58,22 @@ That's it. The binaries land in `cmd/clicks/clicks`, `cmd/windows/windows`, `cmd
 
 ## One-time permission setup
 
-macOS requires four TCC permissions for stage-studio to work. **Grant them all to the terminal app you'll run stage-studio from** (Terminal, iTerm, cmux, etc.). Open *System Settings → Privacy & Security* and toggle each:
+Recording routes through `/Applications/Stage Studio.app`, so **the permissions live on the app**, granted once. Launch it, record something, and macOS asks for Screen Recording and Microphone the first time. Because the bundle id is frozen and the app is signed with a real Developer ID, those grants survive every rebuild — see [the hotkey app](#3-the-hotkey-app-no-claude-session-needed).
 
-| Permission | Why | Symptom if missing |
-|---|---|---|
-| **Screen Recording** | ScreenCaptureKit needs this to capture window pixels | Recordings come out blank / black, no error |
-| **Microphone** | AVCaptureSession needs this for audio | Video has no audio track |
-| **Accessibility** | `CGEvent.tapCreate` for cursor tracking | Cursor positions not captured (currently unused in output, but recorded for future overlays) |
-| **Input Monitoring** | Needed for mouse-button events to reach the event tap | Move events captured but click events silently dropped |
+| Permission | Granted to | Why | Symptom if missing |
+|---|---|---|---|
+| **Screen Recording** | Stage Studio.app | ScreenCaptureKit needs this to capture window pixels | Recordings come out blank / black, no error |
+| **Microphone** | Stage Studio.app | AVCaptureSession needs this for audio | Video has no audio track |
 
-**Important:** after enabling **Input Monitoring**, you must restart the terminal app — that grant doesn't take effect until the parent process restarts.
+That's the whole list for the normal path. The hotkeys use Carbon's `RegisterEventHotKey` and the control surface is a Unix socket, so neither adds an Accessibility, Input Monitoring, Automation, or firewall prompt.
+
+**`--headless` is the exception.** It bypasses the app and spawns the recorder inside your shell, so the grants it needs are the ones on *your terminal app* (Terminal, iTerm, cmux…) — Screen Recording and Microphone as above, plus **Accessibility** and **Input Monitoring** for the click/cursor track. Input Monitoring doesn't take effect until you restart the terminal. Consolidating onto the app is precisely what makes this table shorter for everyone else.
 
 ---
 
-## Three ways to use it
+## One engine, three front doors
+
+There is only one recording engine now: the app. The hotkey, the CLI and Claude are three ways to ask it for a recording, and **every one of them puts the pill on screen**. A recording you can't see and can't kill isn't something this tool knows how to make.
 
 ### 1. From a Claude Code chat (the intended UX)
 
@@ -79,29 +85,45 @@ Claude will:
 
 1. Enumerate your open windows
 2. Pick the relevant one contextually, or ask which one if it's ambiguous
-3. Spawn the recorder in a background bash task with open-ended duration
-4. Tell you "recording — say stop when done"
-5. When you say stop, SIGTERM the recorder so it finalizes the MP4 cleanly
+3. Ask the app to start recording — launching it first if it isn't running
+4. Tell you "recording — say stop when done", once the app confirms capture actually began
+5. When you say stop, run `stage-studio stop`; the app finalizes the MP4
 6. Tell you where the output landed
 
-This is the path everything is optimized for. You stay in chat the whole time.
+What you see: the pill, ringed in violet and credited **"Claude · Recording Safari…"** through the countdown, then **"Claude · 0:07"** while it captures. A human-started session has neither the ring nor the credit — that difference is the whole reason an agent is allowed to start one at all. The record dot stays red either way: red means "capturing right now", whoever asked.
+
+`esc`, the pill's **Stop**, and `⌥⌘R` end Claude's session exactly as they end yours, and Claude is told plainly that you did it rather than being handed a missing file.
 
 ### 2. From the terminal directly
 
+The CLI drives the same app, so a terminal recording gets the same pill and the same physical controls.
+
 ```bash
-# fixed-duration recording targeting the frontmost non-terminal window
+# fixed-duration recording of the frontmost non-terminal window
 bun run cli --duration 8 --output ./demo.mp4
 
 # fixed duration, targeting a window by title substring
 bun run cli --duration 10 --window "Linear" --output ./demo.mp4
 
-# open-ended recording — runs until you SIGTERM the recorder PID
+# open-ended: returns as soon as capture is underway, then stop when you like
 bun run cli --duration 0 --window-id 8387 --output ./demo.mp4
-# prints "[stage-studio] recorder PID: 12345" to stdout
-# in another shell: kill -TERM 12345  (recorder finalizes, MP4 saved)
+bun run cli stop
 ```
 
-Listen for the **Tink** sound — that's recording start. **Pop** is recording stop.
+`start` never answers optimistically — it holds until the countdown has run out, so you learn `recording` or `cancelled`, not a "started" you vetoed a second later. Exit codes say which: **3** busy (a session is already live — it will never queue or preempt), **4** cancelled by hand, **2** the app isn't running, **1** everything else.
+
+```bash
+bun run cli status          # what the app is doing, as JSON
+bun run cli cancel          # abort and delete the partial file
+bun run cli list-windows    # on-screen windows as JSON
+bun run cli --headless ...  # bypass the app entirely (see below)
+```
+
+**`--headless`** spawns the recorder directly in your shell — the pre-app path. No pill, no countdown, nobody watching. It exists for contexts with no GUI session to show a pill in, and it wants the TCC grants on your terminal rather than on the app. In that mode the CLI prints `[stage-studio] recorder PID: <pid>`; `kill -TERM <pid>` stops it cleanly. Listen for the **Tink** sound — that's recording start; **Pop** is stop.
+
+#### How the CLI talks to the app
+
+A Unix domain socket at `~/Library/Application Support/Stage Studio/control.sock`, mode 0600, one JSON request per connection: `ping` / `status` / `start` / `stop` / `cancel`. A socket file was chosen over the alternatives on permission grounds — a URL scheme can't answer back, a localhost port can raise the firewall prompt, and Apple Events would add an Automation grant. A socket adds no TCC surface at all.
 
 ### 3. The hotkey app (no Claude session needed)
 
@@ -175,23 +197,50 @@ $APP --debug-show pill-countdown --debug-midline   # midline = centering check
 $APP --debug-show pill-saved --debug-hover         # filename's click affordance
 $APP --debug-reveal                                # exercise the Finder reveal
 
+# the agent treatment — violet ring + "Claude · " attribution
+$APP --debug-show pill-countdown --debug-agent --debug-midline
+$APP --debug-show pill-recording --debug-agent --debug-label "Claude"
+
 # drive the whole session against one window, then quit
 $APP --debug-record "Safari" --debug-record-seconds 5
 ```
 
 `app/tools/inkbox` measures where text ink actually sits relative to a row's
 midline in a screenshot, so "optically centered" stays a number rather than an
-impression.
+impression. Crop the shot to the capsule band first (`sips -c 76 <width>` — the
+pill row is 38pt, and the shadow margin is symmetric, so the crop stays centred),
+otherwise it measures whatever desktop is showing above and below the pill.
+
+**Verifying the human override.** The one link that can't be exercised
+synthetically is the physical `esc` press: the hotkey is a Carbon grab, and
+injecting a keystroke would need an Accessibility grant this app deliberately
+doesn't have. So the control surface exposes `escape`, which calls the very
+function the key calls — no separate code path, and no waiter of its own, so what
+it proves is that overriding an agent's session resolves that agent's pending
+`start` as `cancelled`:
+
+```bash
+SOCK=~/Library/Application\ Support/Stage\ Studio/control.sock
+echo '{"command":"escape"}' | nc -U "$SOCK"
+```
 
 #### CLI reference
 
 ```
-  -t, --duration <s>    seconds, or 0 for open-ended (stops on SIGTERM, 5min cap)
+  stage-studio [options]        start a recording through the app (default)
+  stage-studio stop             stop the live recording, print the file
+  stage-studio cancel           abort and delete the partial file
+  stage-studio status           what the app is doing, as JSON
+  stage-studio list-windows     on-screen windows as JSON
+
+  -t, --duration <s>    seconds, or 0 for open-ended (5min cap either way)
   -o, --output <path>   final MP4 path (default ./out.mp4)
   -w, --window <pat>    target window pattern (case-insensitive substring)
-      --window-id <N>   target specific CGWindowID (use `cmd/windows list` to find)
-      --work-dir <p>    intermediate artifacts (default ./out)
-      --skip-record     reuse the last recording, re-render only
+      --window-id <N>   target specific CGWindowID (`stage-studio list-windows`)
+      --label <name>    who the pill credits (default Claude)
+      --source <who>    agent (default) or human — picks the pill's treatment
+      --headless        bypass the app: direct recorder spawn, no pill
+      --work-dir <p>    intermediate artifacts, headless only (default ./out)
 ```
 
 #### Picking a window manually
@@ -219,6 +268,8 @@ If you want a procedural background instead of an image, set `RECORDER_BG_IMAGE=
 ---
 
 ## How it works
+
+The capture pipeline below is the `--headless` topology — the CLI spawning the recorder itself. On the default path the CLI hands the window id to the app over the control socket, and the app owns everything from the countdown to the finalized file; the recorder and its pipeline are identical either way.
 
 ```
 ┌──────────────────┐
@@ -273,7 +324,8 @@ This repo contains the trajectory of a few earlier attempts, kept as reference:
 - **5-minute hard cap on open-ended recordings.** A safety to prevent forgotten recordings from filling the disk. Bump via `OPEN_ENDED_MAX_DURATION_S` in `cmd/recorder/main.swift` if you need longer.
 - **A/V sync drifts over long recordings.** Fine for ≤30s clips. ScreenCaptureKit and AVCaptureSession share the mach clock so it's a slow drift, not a sudden one.
 - **No pause.** Stop and re-record covers the same need with less mechanism.
-- **X / hard kill on the recorder loses the recording.** SIGKILL doesn't give AVAssetWriter time to finalize the MP4. Stop via "say stop to Claude" or `kill -TERM <recorder-pid>`, which traps cleanly. Documented gap.
+- **SIGKILL on the recorder loses the recording.** It doesn't give AVAssetWriter time to finalize the MP4. Every normal stop path (the pill, `esc`, `⌥⌘R`, `stage-studio stop`) traps cleanly; only a hard kill of the app or a `--headless` recorder can lose a take.
+- **A stop that arrives after you already stopped by hand reports `not_recording`.** The file is fine — the app finalized it when you hit `esc` — but the CLI's stop response can't tell that apart from "there was never a session". Check `stage-studio status` for the saved path.
 - **Mac-only, single display, no webcam, no system audio (mic only).**
 - **The hotkey app is signed but not notarized yet.** `spctl` rejects it as
   "Unnotarized Developer ID". A locally built copy has no quarantine flag so it
@@ -290,7 +342,8 @@ This repo contains the trajectory of a few earlier attempts, kept as reference:
 stage-studio/
 ├── .claude/skills/stage-studio/  Claude skill for the chat-driven flow
 ├── app/                       Hotkey recorder — LSUIElement agent app (Swift)
-│   ├── Sources/               main, AppDelegate, picker, pill, session, hotkeys
+│   ├── Sources/               main, AppDelegate, picker, pill, session, hotkeys,
+│   │                          ControlServer (the socket the CLI drives)
 │   ├── Resources/             Info.plist, entitlements, icon-master.png
 │   ├── tools/inkbox/          Measures text ink vs. a row midline in a shot
 │   └── build.sh               → build/Stage Studio.app (Developer ID signed)
@@ -302,7 +355,7 @@ stage-studio/
 │   └── gradient-preview/      Standalone renderer for background variants (Swift)
 ├── render/                    v1 Remotion compositor (backlogged)
 ├── src/
-│   └── cli.ts                 Bun orchestrator
+│   └── cli.ts                 Bun CLI — drives the app; --headless direct-spawns
 ├── test/                      v1 pixel-sampling validation harness
 ├── SHAPE-ui.md                Design rationale for Claude-as-UI
 └── README.md                  this file
