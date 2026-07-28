@@ -4,6 +4,14 @@ out/
 *.log
 .DS_Store
 
+# Hotkey app: the .app bundle is a build product tree (the repo tracks the small
+# cmd/* binaries, but a bundle is noise) plus the dev-only measuring instrument.
+app/build/
+app/tools/inkbox/inkbox
+
+# Verification screenshots taken while building surfaces.
+.screenshots/
+
 # Test recordings staged into render/public for the v1 Remotion-based renderer
 # (backlogged). Regenerated per run by the cli.
 render/public/source.*

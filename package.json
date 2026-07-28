@@ -10,7 +10,8 @@
     "build:clicks": "swiftc -O cmd/clicks/main.swift -o cmd/clicks/clicks",
     "build:windows": "swiftc -O cmd/windows/main.swift -o cmd/windows/windows",
     "build:recorder": "swiftc -O cmd/recorder/main.swift -o cmd/recorder/recorder",
-    "build": "pnpm run build:clicks && pnpm run build:windows && pnpm run build:recorder",
+    "build:app": "./app/build.sh",
+    "build": "pnpm run build:clicks && pnpm run build:windows && pnpm run build:recorder && pnpm run build:app",
     "cli": "bun run src/cli.ts",
     "test": "bun run test/run-tests.ts"
   },
