@@ -32,6 +32,12 @@ struct LaunchOptions {
     var debugHover = false
     /// Exercise the Finder-reveal call directly, then quit.
     var debugReveal = false
+    /// Dress a debug surface as an agent-initiated session (violet ring +
+    /// attribution). The agent pill has its own text runs — "Claude · Recording
+    /// Linear…", "Claude · 0:42" — and a text run that can't be summoned can't be
+    /// measured, so the attribution states are first-class debug surfaces too.
+    var debugAgent = false
+    var debugLabel = "Claude"
 }
 
 @MainActor
@@ -156,6 +162,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         case "cancel":
             session.requestCancel { reply($0) }
+
+        // The human override, fired deterministically. `escape` is NOT another
+        // way to cancel — `cancel` already exists. It calls the very function the
+        // physical Esc key calls, with no waiter of its own, so what it proves is
+        // that a user overriding an agent's session resolves that agent's pending
+        // `start` as cancelled. A synthetic key event can't prove that (the hotkey
+        // is a Carbon grab, not a keystroke anyone can inject without an
+        // Accessibility grant this app deliberately doesn't have), so the same
+        // entry point is exposed directly rather than approximated.
+        case "escape":
+            session.escape()
+            respond(["ok": true, "state": session.describe(session.phase)])
 
         default:
             respond(["ok": false, "error": "unknown_command", "message": request.command])
@@ -323,6 +341,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             forceHover: options.debugHover
         )
         self.pill = pill
+        pill.source = options.debugAgent ? .agent(label: options.debugLabel) : .human
         pill.onStop = { note("stop tapped") }
         // The real reveal call — not a stand-in — so clicking the filename in a
         // debug surface proves the shipping path.

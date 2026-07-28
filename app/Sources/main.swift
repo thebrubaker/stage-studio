@@ -28,6 +28,8 @@ func usage() -> Never {
       --debug-freeze             hold animations at their resting phase
       --debug-hover              force the saved filename's hover affordance on
       --debug-reveal             reveal the newest recording in Finder, then quit
+      --debug-agent              dress the surface as an agent session (ring + attribution)
+      --debug-label <name>       who the attribution credits (default Claude)
 
     End-to-end (drives the real session, then quits):
       --debug-record <id|pattern>   window to record (CGWindowID or app/title text)
@@ -57,6 +59,15 @@ while i < argv.count {
         options.debugHover = true
     case "--debug-reveal":
         options.debugReveal = true
+    case "--debug-agent":
+        options.debugAgent = true
+    case "--debug-label":
+        i += 1
+        guard i < argv.count else {
+            FileHandle.standardError.write(Data("--debug-label needs a name\n".utf8))
+            exit(64)
+        }
+        options.debugLabel = argv[i]
     case "--debug-capture":
         i += 1
         guard i < argv.count else {
