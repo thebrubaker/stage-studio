@@ -19,3 +19,6 @@ render/public/source.*
 # Stray cross-project agent memory that landed here at some point — belongs
 # in the workspace-level ~/Code/.claude/, not this repo.
 .claude/agent-memory/linear-workflow/
+
+# Packaged install artifacts (built by app/package.sh, published to Releases)
+app/dist/
