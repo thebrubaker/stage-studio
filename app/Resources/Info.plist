@@ -26,7 +26,10 @@
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>14.0</string>
+	<!-- Must match the -target on every swiftc invocation (app/build.sh and the
+	     package.json build:* scripts). This key is only a claim; the binaries'
+	     LC_BUILD_VERSION is what dyld enforces. They disagreed once. -->
+	<string>15.0</string>
 	<!-- Agent app: no Dock icon, no menu bar. The pill and picker are the whole UI. -->
 	<key>LSUIElement</key>
 	<true/>

@@ -24,8 +24,23 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$HERE/Resources/Info.plist" "$APP/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
+# --- Deployment target ----------------------------------------------------
+# macOS 15 (Sequoia) is the floor, and it must be stated EXPLICITLY on every
+# swiftc invocation in this project. swiftc with no -target bakes the *build
+# machine's* OS version in as the binary's minimum, silently — which shipped an
+# app declaring LSMinimumSystemVersion 14.0 around an embedded recorder that
+# refused to load below macOS 26. It launches fine on the build machine and
+# dies with a dyld error in the second user's hands.
+#
+# 15 rather than 14 because the recorder renders its background with SwiftUI
+# MeshGradient (Sequoia+) and has no #available fallback for the API's absence.
+#
+# The recorder and CLI helpers are built by `pnpm run build:*` in package.json,
+# which carries the same flag — JSON can't hold a comment, so the reasoning
+# lives here. Keep the two in sync; `otool -l <bin> | grep -A4 LC_BUILD_VERSION`
+# is how you check what actually got baked in.
 swiftc -O \
-  -target arm64-apple-macosx14.0 \
+  -target arm64-apple-macosx15.0 \
   "$HERE"/Sources/*.swift \
   -o "$APP/Contents/MacOS/StageStudio"
 
