@@ -3,7 +3,7 @@ import { Desktop } from "./components/desktop.tsx";
 import { Picker } from "./components/picker.tsx";
 import { Pill } from "./components/pill.tsx";
 
-// Visual plan for the stage-studio hotkey recorder. Four moments of the flow,
+// Visual plan for the windowclip hotkey recorder. Four moments of the flow,
 // each rendered on a simulated macOS desktop. The mock surfaces (picker panel,
 // pill) use hardcoded macOS-material colors on purpose — they depict native UI,
 // not runtime-themed UI.
@@ -61,7 +61,7 @@ export function App() {
       <div className="mx-auto max-w-3xl px-6 py-6">
         <header className="flex items-baseline justify-between">
           <div>
-            <h1 className="text-lg font-semibold tracking-tight">stage-studio · hotkey recorder</h1>
+            <h1 className="text-lg font-semibold tracking-tight">windowclip · hotkey recorder</h1>
             <p className="mt-0.5 text-sm text-muted-foreground">
               Visual plan — the four moments of the flow. Native macOS surfaces, mocked.
             </p>

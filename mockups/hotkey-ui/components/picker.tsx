@@ -16,7 +16,7 @@ export function Picker({ selected = 0 }: { selected?: number }) {
           <span className="text-[11px] font-medium uppercase tracking-widest text-white/40">
             Record a window
           </span>
-          <span className="font-mono text-[10px] text-white/25">stage-studio</span>
+          <span className="font-mono text-[10px] text-white/25">windowclip</span>
         </div>
         <div className="grid grid-cols-3 gap-2 p-3">
           {MOCK_WINDOWS.map((w, i) => (

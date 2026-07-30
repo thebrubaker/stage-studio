@@ -1,14 +1,14 @@
 ---
-name: stage-studio
+name: windowclip
 description: Record a polished MP4 of a single macOS window — gradient background, drop shadow, mic audio — driven from a Claude chat. Use when Joel says things like "let's record a video of this", "make a clip", "demo this in a recording".
 ---
 
-# stage-studio — Claude-driven recording flow
+# windowclip — Claude-driven recording flow
 
 You are the conversational front end for this tool. The CLI exposes the primitives;
 you compose them around `AskUserQuestion` and short foreground bash calls.
 
-**Recordings run inside the Stage Studio app, not inside your bash task.** You ask
+**Recordings run inside the Windowclip app, not inside your bash task.** You ask
 the app to record; the app puts a pill on Joel's screen, counts down, captures, and
 finalizes. This matters for three reasons:
 
@@ -53,7 +53,7 @@ Options:
   - Linear — DIG-228
   - Chrome — onbook
   - Slack — #d-dev
-  - Cursor — stage-studio
+  - Cursor — windowclip
 ```
 
 Hold onto the chosen `windowId`.
@@ -77,7 +77,7 @@ cd ~/Code/stage-studio && bun run src/cli.ts \
 **Run this in the foreground.** It is not a long-lived process — it returns as soon
 as the outcome is real, because the app answers honestly rather than optimistically:
 
-- **exit 0**, `[stage-studio] recording → <path>` — the countdown survived and
+- **exit 0**, `[windowclip] recording → <path>` — the countdown survived and
   capture is genuinely underway. Only now may you tell Joel it's recording.
 - **exit 4**, `cancelled during the countdown` — Joel hit `esc` in the 3-second
   veto window. Nothing was recorded and no file exists. Don't retry unless he asks;
@@ -160,14 +160,14 @@ id; `--label <name>` changes who the pill credits.
   recording can't fill the disk.
 - **No pause.** Stop, set up, record again.
 - **Don't kill the bash task to stop a recording.** The recording isn't running in
-  your task — it's in the app. `stage-studio stop` is the stop.
+  your task — it's in the app. `windowclip stop` is the stop.
 
 ## `--headless` — the fallback, not the default
 
 `--headless` bypasses the app and spawns the recorder directly, the way this tool
 worked before the app existed. No pill, no countdown, no way for Joel to see or stop
 it — so use it only where there's no GUI session to show a pill in (CI, a remote
-shell). In that mode the CLI prints `[stage-studio] recorder PID: <pid>` and you
+shell). In that mode the CLI prints `[windowclip] recorder PID: <pid>` and you
 stop the recording with `kill -TERM <pid>`.
 
 It also means the recording runs under *your terminal's* identity, so it needs
@@ -178,8 +178,8 @@ app-routed path exists to stop worrying about.
 
 | Symptom | Cause |
 |---|---|
-| `Stage Studio isn't installed at /Applications/Stage Studio.app` | Build + install it: `pnpm run build:app && ditto "app/build/Stage Studio.app" "/Applications/Stage Studio.app"` |
-| `Stage Studio did not come up within 15s` | Launch it by hand and check stderr; if `⌥⌘R` is taken by another app it says so |
+| `Windowclip isn't installed at /Applications/Windowclip.app` | Build + install it: `pnpm run build:app && ditto "app/build/Windowclip.app" "/Applications/Windowclip.app"` |
+| `Windowclip did not come up within 15s` | Launch it by hand and check stderr; if `⌥⌘R` is taken by another app it says so |
 | exit 3 busy, but nothing is on screen | `status` shows the real state; `cancel` clears a stuck session |
 | Blank/black video, or no audio (headless only) | Screen Recording / Microphone missing on the *terminal*. The app-routed path doesn't have this problem |
 
@@ -194,7 +194,7 @@ app-routed path exists to stop worrying about.
 - `src/cli.ts` — Bun CLI. Talks to the app over a Unix socket; `--headless` keeps
   the old direct-spawn path.
 - `app/Sources/ControlServer.swift` — the socket (`~/Library/Application Support/
-  Stage Studio/control.sock`, 0600, one JSON request per connection).
+  Windowclip/control.sock`, 0600, one JSON request per connection).
 - `app/Sources/SessionController.swift` — countdown → record → save state machine,
   and the honest-answer semantics behind the exit codes above.
 - `cmd/windows/windows` — window enumeration (`list`, `frontmost`, `find <pattern>`).

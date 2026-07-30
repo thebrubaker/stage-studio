@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 /**
- * Simulated macOS desktop — a 16:10 frame with the stage-studio indigo-ish
+ * Simulated macOS desktop — a 16:10 frame with the windowclip indigo-ish
  * gradient wallpaper. Everything inside is mock "native" UI, so colors in
  * here are deliberately hardcoded (fidelity to macOS materials, not the
  * runtime theme).

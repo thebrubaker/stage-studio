@@ -51,10 +51,10 @@ jobs:
       - name: Package release tarball
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          STAGE_DIR="stage-studio-${TAG}"
+          STAGE_DIR="windowclip-${TAG}"
           ARCHIVE="${STAGE_DIR}-arm64.tar.gz"
 
-          # Stage into a top-level dir so extraction yields `stage-studio-vX.Y.Z/`
+          # Stage into a top-level dir so extraction yields `windowclip-vX.Y.Z/`
           # rather than dumping files into the user's cwd. BSD tar (macOS) doesn't
           # support --transform / --one-top-level, so we copy then tar.
           mkdir -p "$STAGE_DIR"/{cmd/clicks,cmd/windows,cmd/recorder,cmd/gradient-preview,src,assets,.claude/skills}
@@ -65,7 +65,7 @@ jobs:
           cp src/cli.ts                        "$STAGE_DIR/src/"
           cp package.json                      "$STAGE_DIR/"
           cp assets/big-sur-graphic.jpg        "$STAGE_DIR/assets/"
-          cp -R .claude/skills/stage-studio    "$STAGE_DIR/.claude/skills/"
+          cp -R .claude/skills/windowclip    "$STAGE_DIR/.claude/skills/"
           cp README.md LICENSE                 "$STAGE_DIR/"
 
           tar -czvf "$ARCHIVE" "$STAGE_DIR"
@@ -88,8 +88,8 @@ jobs:
             ## Install
 
             ```bash
-            curl -L -o stage-studio.tar.gz "https://github.com/thebrubaker/stage-studio/releases/download/${{ env.TAG }}/${{ env.ARCHIVE }}"
-            tar -xzf stage-studio.tar.gz
+            curl -L -o windowclip.tar.gz "https://github.com/thebrubaker/stage-studio/releases/download/${{ env.TAG }}/${{ env.ARCHIVE }}"
+            tar -xzf windowclip.tar.gz
             cd ${{ env.STAGE_DIR }}
 
             # macOS quarantines unsigned binaries on first run. Strip:

@@ -1,4 +1,4 @@
-# stage-studio
+# windowclip
 
 A tiny macOS CLI that records a window and outputs a polished MP4 — single window, isolated from notifications and other apps, composited onto a vibrant background with rounded corners and a soft drop shadow. Built to be driven from a Claude Code chat as much as from the terminal.
 
@@ -11,7 +11,7 @@ Replaces Screen Studio ($89/yr) and OBS (heavy) for one specific need: "I want a
 ## What it does
 
 ```bash
-# in any Claude Code session, with the stage-studio skill loaded:
+# in any Claude Code session, with the windowclip skill loaded:
 you:    let's record a clip of this Linear ticket
 claude: [identifies your Linear window, asks the app to record it]
         [a pill appears bottom-center: "Claude · Recording Linear…" 3 · 2 · 1]
@@ -58,7 +58,7 @@ That's it. The binaries land in `cmd/clicks/clicks`, `cmd/windows/windows`, `cmd
 
 ## One-time permission setup
 
-Recording routes through `/Applications/Stage Studio.app`, so **the permissions live on the app**, granted once. Because the bundle id is frozen and the app is signed with a real Developer ID, those grants survive every rebuild — see [the hotkey app](#3-the-hotkey-app-no-claude-session-needed).
+Recording routes through `/Applications/Windowclip.app`, so **the permissions live on the app**, granted once. Because the bundle id is frozen and the app is signed with a real Developer ID, those grants survive every rebuild — see [the hotkey app](#3-the-hotkey-app-no-claude-session-needed).
 
 **You should not need this section.** On first launch the app checks both grants and, if either is missing, puts up a setup window that says what's missing and offers the one action that state allows — request it, open the exact System Settings pane if macOS won't prompt again, or relaunch once a Screen Recording grant has arrived (a grant doesn't reach a process that was already running). If both grants are already in place the app stays invisible, as it does the rest of the time. It's also reachable any time from **Permissions…** in the status menu, for the case where a grant gets revoked later. The table below is what that window is automating, kept here as the reference.
 
@@ -66,8 +66,8 @@ macOS will also raise its **own** capture-consent dialog when a recording starts
 
 | Permission | Granted to | Why | Symptom if missing |
 |---|---|---|---|
-| **Screen Recording** | Stage Studio.app | ScreenCaptureKit needs this to capture window pixels | Recordings come out blank / black, no error |
-| **Microphone** | Stage Studio.app | AVCaptureSession needs this for audio | Video has no audio track |
+| **Screen Recording** | Windowclip.app | ScreenCaptureKit needs this to capture window pixels | Recordings come out blank / black, no error |
+| **Microphone** | Windowclip.app | AVCaptureSession needs this for audio | Video has no audio track |
 
 That's the whole list for the normal path. The hotkeys use Carbon's `RegisterEventHotKey` and the control surface is a Unix socket, so neither adds an Accessibility, Input Monitoring, Automation, or firewall prompt.
 
@@ -81,7 +81,7 @@ There is only one recording engine now: the app. The hotkey, the CLI and Claude 
 
 ### 1. From a Claude Code chat (the intended UX)
 
-The repo ships with a Claude skill at `.claude/skills/stage-studio/SKILL.md`. Open the repo (or any project that has stage-studio installed) in Claude Code, and ask Claude to record something:
+The repo ships with a Claude skill at `.claude/skills/windowclip/SKILL.md`. Open the repo (or any project that has windowclip installed) in Claude Code, and ask Claude to record something:
 
 > *"Let me record a clip of what we just built."*
 
@@ -91,7 +91,7 @@ Claude will:
 2. Pick the relevant one contextually, or ask which one if it's ambiguous
 3. Ask the app to start recording — launching it first if it isn't running
 4. Tell you "recording — say stop when done", once the app confirms capture actually began
-5. When you say stop, run `stage-studio stop`; the app finalizes the MP4
+5. When you say stop, run `windowclip stop`; the app finalizes the MP4
 6. Tell you where the output landed
 
 What you see: the pill, ringed in violet and credited **"Claude · Recording Safari…"** through the countdown, then **"Claude · 0:07"** while it captures. A human-started session has neither the ring nor the credit — that difference is the whole reason an agent is allowed to start one at all. The record dot stays red either way: red means "capturing right now", whoever asked.
@@ -123,11 +123,11 @@ bun run cli list-windows    # on-screen windows as JSON
 bun run cli --headless ...  # bypass the app entirely (see below)
 ```
 
-**`--headless`** spawns the recorder directly in your shell — the pre-app path. No pill, no countdown, nobody watching. It exists for contexts with no GUI session to show a pill in, and it wants the TCC grants on your terminal rather than on the app. In that mode the CLI prints `[stage-studio] recorder PID: <pid>`; `kill -TERM <pid>` stops it cleanly. Listen for the **Tink** sound — that's recording start; **Pop** is stop.
+**`--headless`** spawns the recorder directly in your shell — the pre-app path. No pill, no countdown, nobody watching. It exists for contexts with no GUI session to show a pill in, and it wants the TCC grants on your terminal rather than on the app. In that mode the CLI prints `[windowclip] recorder PID: <pid>`; `kill -TERM <pid>` stops it cleanly. Listen for the **Tink** sound — that's recording start; **Pop** is stop.
 
 #### How the CLI talks to the app
 
-A Unix domain socket at `~/Library/Application Support/Stage Studio/control.sock`, mode 0600, one JSON request per connection: `ping` / `status` / `start` / `stop` / `cancel`. A socket file was chosen over the alternatives on permission grounds — a URL scheme can't answer back, a localhost port can raise the firewall prompt, and Apple Events would add an Automation grant. A socket adds no TCC surface at all.
+A Unix domain socket at `~/Library/Application Support/Windowclip/control.sock`, mode 0600, one JSON request per connection: `ping` / `status` / `start` / `stop` / `cancel`. A socket file was chosen over the alternatives on permission grounds — a URL scheme can't answer back, a localhost port can raise the firewall prompt, and Apple Events would add an Automation grant. A socket adds no TCC surface at all.
 
 ### 3. The hotkey app (no Claude session needed)
 
@@ -137,21 +137,29 @@ onto the *same* recorder. The Claude and CLI flows are untouched.
 
 ```bash
 pnpm run build:app
-ditto "app/build/Stage Studio.app" "/Applications/Stage Studio.app"
-open "/Applications/Stage Studio.app"
+ditto "app/build/Windowclip.app" "/Applications/Windowclip.app"
+open "/Applications/Windowclip.app"
 ```
 
-Its permanent home is `/Applications/Stage Studio.app`. The bundle carries its
+Its permanent home is `/Applications/Windowclip.app`. The bundle carries its
 own copy of the recorder and the background art, so it keeps working with no
 checkout present — don't point a login item at a build directory.
 
-**Identity is frozen on purpose.** The bundle id `io.digitalpine.stage-studio`
+**Identity is frozen on purpose.** The bundle id `io.digitalpine.windowclip`
 is the key macOS files every permission grant under, and the app is signed with
 a real Developer ID rather than ad-hoc. Together those give it a designated
 requirement that is byte-identical on every rebuild, so Screen Recording and
 Microphone grants survive rebuilds instead of resetting. Changing the bundle id
 — or going back to ad-hoc signing — makes macOS treat it as a brand-new app and
 forget every permission. Don't.
+
+It moved once, on purpose: the 2026-07-30 rename from **Stage Studio**
+(`io.digitalpine.stage-studio`) to **Windowclip**. That deliberately forfeited
+the old grants — a renamed app is a new app to macOS, and re-walking first-run
+was the intent. If you are upgrading from a Stage Studio install, expect to
+grant Screen Recording and Microphone again, and to delete
+`/Applications/Stage Studio.app` and `~/Library/Application Support/Stage Studio/`
+by hand.
 
 The build uses hardened runtime (needed for notarization later), which gates the
 microphone behind `com.apple.security.device.audio-input` — hence the
@@ -169,7 +177,7 @@ of them lands here, wherever `--output` pointed. Long names are middle-truncated
 so the timestamp (the part that tells two takes apart) survives. A recording
 you've since moved or thrown away stays listed, greyed and marked *— missing*,
 rather than silently vanishing or beeping at you. The history lives in
-`~/Library/Application Support/Stage Studio/recents.json` and survives relaunch.
+`~/Library/Application Support/Windowclip/recents.json` and survives relaunch.
 
 **The flow:**
 
@@ -203,7 +211,7 @@ Microphone grants the recorder already needs.
 **Verifying a surface without recording anything:**
 
 ```bash
-APP="app/build/Stage Studio.app/Contents/MacOS/StageStudio"
+APP="app/build/Windowclip.app/Contents/MacOS/Windowclip"
 
 # summon a surface, screenshot it, quit — self-cleaning
 "$APP" --debug-show picker --debug-capture /tmp/picker.png
@@ -255,7 +263,7 @@ APP="app/build/Stage Studio.app/Contents/MacOS/StageStudio"
 
 `--debug-screen` / `--debug-mic` **inject** the row states rather than reading TCC,
 and that is the point: the alternative — `tccutil reset ScreenCapture
-io.digitalpine.stage-studio` — revokes the grant the installed app runs on, and
+io.digitalpine.windowclip` — revokes the grant the installed app runs on, and
 re-granting is a manual chore for a screenshot. The ungranted states are rendered,
 never provoked. (`--debug-mic relaunch` is rejected: a mic grant applies to the
 running process immediately, so that state cannot exist.)
@@ -360,16 +368,16 @@ echo '{"command":"escape"}' | nc -U "$SOCK"
 #### CLI reference
 
 ```
-  stage-studio [options]        start a recording through the app (default)
-  stage-studio stop             stop the live recording, print the file
-  stage-studio cancel           abort and delete the partial file
-  stage-studio status           what the app is doing, as JSON
-  stage-studio list-windows     on-screen windows as JSON
+  windowclip [options]        start a recording through the app (default)
+  windowclip stop             stop the live recording, print the file
+  windowclip cancel           abort and delete the partial file
+  windowclip status           what the app is doing, as JSON
+  windowclip list-windows     on-screen windows as JSON
 
   -t, --duration <s>    seconds, or 0 for open-ended (5min cap either way)
   -o, --output <path>   final MP4 path (default ./out.mp4)
   -w, --window <pat>    target window pattern (case-insensitive substring)
-      --window-id <N>   target specific CGWindowID (`stage-studio list-windows`)
+      --window-id <N>   target specific CGWindowID (`windowclip list-windows`)
       --label <name>    who the pill credits (default Claude)
       --source <who>    agent (default) or human — picks the pill's treatment
       --headless        bypass the app: direct recorder spawn, no pill
@@ -457,8 +465,8 @@ This repo contains the trajectory of a few earlier attempts, kept as reference:
 - **5-minute hard cap on open-ended recordings.** A safety to prevent forgotten recordings from filling the disk. Bump via `OPEN_ENDED_MAX_DURATION_S` in `cmd/recorder/main.swift` if you need longer.
 - **A/V sync drifts over long recordings.** Fine for ≤30s clips. ScreenCaptureKit and AVCaptureSession share the mach clock so it's a slow drift, not a sudden one.
 - **No pause.** Stop and re-record covers the same need with less mechanism.
-- **SIGKILL on the recorder loses the recording.** It doesn't give AVAssetWriter time to finalize the MP4. Every normal stop path (the pill, `esc`, `⌥⌘R`, `stage-studio stop`) traps cleanly; only a hard kill of the app or a `--headless` recorder can lose a take.
-- **A stop that arrives after you already stopped by hand reports `not_recording`.** The file is fine — the app finalized it when you hit `esc` — but the CLI's stop response can't tell that apart from "there was never a session". Check `stage-studio status` for the saved path.
+- **SIGKILL on the recorder loses the recording.** It doesn't give AVAssetWriter time to finalize the MP4. Every normal stop path (the pill, `esc`, `⌥⌘R`, `windowclip stop`) traps cleanly; only a hard kill of the app or a `--headless` recorder can lose a take.
+- **A stop that arrives after you already stopped by hand reports `not_recording`.** The file is fine — the app finalized it when you hit `esc` — but the CLI's stop response can't tell that apart from "there was never a session". Check `windowclip status` for the saved path.
 - **Mac-only, single display, no webcam, no system audio (mic only).**
 - **The hotkey app is signed but not notarized yet.** `spctl` rejects it as
   "Unnotarized Developer ID". A locally built copy has no quarantine flag so it
@@ -473,13 +481,13 @@ This repo contains the trajectory of a few earlier attempts, kept as reference:
 
 ```
 stage-studio/
-├── .claude/skills/stage-studio/  Claude skill for the chat-driven flow
+├── .claude/skills/windowclip/ Claude skill for the chat-driven flow
 ├── app/                       Hotkey recorder — LSUIElement agent app (Swift)
 │   ├── Sources/               main, AppDelegate, picker, pill, session, hotkeys,
 │   │                          ControlServer (the socket the CLI drives)
 │   ├── Resources/             Info.plist, entitlements, icon-master.png
 │   ├── tools/inkbox/          Measures text ink vs. a row midline in a shot
-│   └── build.sh               → build/Stage Studio.app (Developer ID signed)
+│   └── build.sh               → build/Windowclip.app (Developer ID signed)
 ├── assets/                    Default background image
 ├── cmd/
 │   ├── clicks/                CGEventTap mouse capture (Swift)
