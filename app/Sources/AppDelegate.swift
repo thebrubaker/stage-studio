@@ -575,6 +575,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return (candidates.max { area($0) < area($1) })?[kCGWindowNumber as String] as? CGWindowID
     }
 
+    /// Window-scoped capture, and that scope has a consequence worth stating: it
+    /// records the window's own layer, NOT the screen composite, so whatever is
+    /// behind the window never appears. A menu shot is therefore **backdrop-blind** —
+    /// proven, not assumed: the same menu captured over a white backdrop and a dark
+    /// one came out byte-identical. So these shots cannot be used to judge
+    /// translucency, vibrancy or contrast-against-background, and a flat-looking panel
+    /// in one is the capture talking, not the material. (An adversarial review of a
+    /// menu shot reached exactly that wrong conclusion.) Use `-R` region capture, as
+    /// the pill/picker/setup surfaces do, if the background matters.
     private nonisolated static func captureWindow(_ id: CGWindowID, to path: String) {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")

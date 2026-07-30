@@ -322,6 +322,16 @@ directory fails silently, `try?` swallows the throw, and the harness reported ev
 that did not exist. A verification tool inventing facts about its own work is worse than
 no tool.
 
+**Menu shots are backdrop-blind, and `--debug-backdrop` does nothing to them.** The
+menu is captured with `screencapture -l<windowid>`, which records the window's own
+layer rather than the screen composite, so nothing behind it is ever in the image —
+proven, not assumed: the same menu shot over a white backdrop and a dark one came out
+byte-identical. Never judge a menu's translucency, vibrancy, or contrast-against-
+background from one of these; a flat-looking panel is the capture method talking. The
+menu itself is a real `NSMenu` on a real `NSStatusItem`, so its material is whatever
+macOS draws. The pill, picker, setup window and gate all use `-R` region capture and
+*are* composited, which is why the backdrop flag works on those.
+
 `--debug-backdrop` parks a flat opaque window behind the surface, in-process. It
 exists because borrowing another app's window doesn't work: a white Preview window
 parked behind the setup panel lost the z-order to the frontmost app between launch
