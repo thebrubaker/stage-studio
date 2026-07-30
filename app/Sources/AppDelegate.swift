@@ -627,14 +627,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func runDebugSetup() {
         let setup = SetupController()
         self.setup = setup
-        if options.debugLive {
-            setup.model.screenRecording = Permissions.screenRecording
-            setup.model.microphone = Permissions.microphone
-            startStatusPolling()
-        } else {
-            setup.model.screenRecording = options.debugScreenStatus ?? .needed
-            setup.model.microphone = options.debugMicStatus ?? .needed
-        }
+        // The flags decide the STARTING state and `--debug-live` decides whether the
+        // window then tracks reality. Composable on purpose: injecting a state the
+        // machine isn't in and letting the poll correct it is the only way to prove
+        // the poll fires at all — a timer that silently never runs looks exactly like
+        // a machine whose permissions didn't change.
+        let liveScreen = options.debugLive ? Permissions.screenRecording : .needed
+        let liveMic = options.debugLive ? Permissions.microphone : .needed
+        setup.model.screenRecording = options.debugScreenStatus ?? liveScreen
+        setup.model.microphone = options.debugMicStatus ?? liveMic
+        if options.debugLive { startStatusPolling() }
         setup.onAction = { [weak self] kind, status in
             note("action tapped: \(kind.rawValue) (\(status.rawValue))")
             self?.performSetupAction(kind, status)
