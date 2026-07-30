@@ -76,16 +76,37 @@ enum PermissionKind: String, CaseIterable {
         }
     }
 
-    /// A `denied` row can't be re-prompted, so it has to say where to go — and
-    /// Screen Recording additionally needs the relaunch, which Microphone doesn't.
-    /// Non-breaking space in "System Settings": the line wraps here, and a wrap
-    /// that splits the name of the app you're being sent to reads as a glitch.
+    /// A `denied` row can't be re-prompted, so it has to say what to do when they
+    /// get there — and Screen Recording additionally needs the relaunch, which
+    /// Microphone doesn't.
+    ///
+    /// It no longer says "System Settings": the button beside it now names the pane,
+    /// so repeating it here was redundant *and* expensive — the two strings competed
+    /// for one row's width and the button lost, truncating to "Screen Recording
+    /// Setti…". Destination belongs on the control; this line is the instruction for
+    /// once you're in it.
     var deniedGuidance: String {
         switch self {
-        case .screenRecording:
-            return "Turned off. Switch it on in System\u{00A0}Settings, then relaunch."
-        case .microphone:
-            return "Turned off. Switch it on in System\u{00A0}Settings."
+        case .screenRecording: return "Turned off. Switch it back on, then relaunch."
+        case .microphone: return "Turned off. Switch it back on."
+        }
+    }
+
+    /// A row whose grant exists but hasn't reached this process.
+    ///
+    /// Deliberately NOT an imperative. "Restart Stage Studio to start using it"
+    /// instructed the user to restart, and then the button hierarchy demoted the
+    /// Restart button to secondary — so reading top-down you hit an order followed
+    /// by a greyed-out control, which reads as the app contradicting itself. This
+    /// states the fact and defers the action, which is what the demotion means.
+    var relaunchGuidance: String { "Allowed — restart when you're done here." }
+
+    /// Names the pane, because the destination is the whole information here. See
+    /// `actionTitle(for:)`.
+    var settingsActionTitle: String {
+        switch self {
+        case .screenRecording: return "Screen Recording Settings"
+        case .microphone: return "Microphone Settings"
         }
     }
 
@@ -93,18 +114,26 @@ enum PermissionKind: String, CaseIterable {
         switch status {
         case .needed, .granted: return reason
         case .denied: return deniedGuidance
-        case .needsRelaunch: return "Allowed. Restart Stage Studio to start using it."
+        case .needsRelaunch: return relaunchGuidance
         }
     }
 
     func actionTitle(for status: PermissionStatus) -> String? {
         switch status {
         case .granted: return nil
-        // Ellipsis: this raises a macOS prompt that needs an answer. "Open
-        // Settings" doesn't get one — it just navigates, which is not what the
+        // Ellipsis: this raises a macOS prompt that needs an answer. The Settings
+        // buttons don't get one — they just navigate, which is not what the
         // ellipsis means.
         case .needed: return "Allow…"
-        case .denied: return "Open Settings"
+        // NOT a bare "Open Settings" on both rows. When both permissions are denied
+        // the two buttons sat side by side with identical labels and identical boxes,
+        // leading to two *different* panes — and the one-prominent-button rule made
+        // that actively misleading rather than merely ambiguous, because colour reads
+        // as priority and never as destination. A user presses blue, lands in Screen
+        // Recording, fixes it, relaunches, and arrives with the microphone still off
+        // having had no reason to think the grey button went somewhere else. The
+        // label is the only thing that can carry a destination.
+        case .denied: return settingsActionTitle
         case .needsRelaunch: return "Relaunch"
         }
     }
@@ -389,6 +418,10 @@ private struct PermissionRowView: View {
                     }
                 }
                 .controlSize(.regular)
+                // The label is load-bearing — it is what tells a denied row's button
+                // WHERE it goes — so it must never be the thing that gets truncated.
+                // Let the guidance text rewrap instead.
+                .fixedSize()
             }
         }
     }
