@@ -71,6 +71,27 @@ enum Theme {
     static let setupTitleSize: CGFloat = 15
     static let setupBodySize: CGFloat = 11.5
 
+    /// A scrim laid *in front of* the panel material, giving the text a ground that
+    /// doesn't depend on what the user has behind the window.
+    ///
+    /// It has to be in front, not behind: the material blends `.behindWindow`, so it
+    /// samples the desktop and draws it ON TOP of any tint underneath it. Over a
+    /// white window the whole panel came back mid-grey and the eyebrow, secondary
+    /// copy and footnote all washed out (seen: `08-ready-on-white`). Anything added
+    /// below the material can't fix that.
+    ///
+    /// Same hue as `pickerTint` so this thickens the existing surface rather than
+    /// introducing a second one, and the picker is left untouched — the picker is a
+    /// momentary panel, this is a window a stranger has to read.
+    ///
+    /// 0.88 rather than something gentler because the residual bleed is what a blind
+    /// contrast read still objected to: at 0.75 the panel measured 34/255 over a dark
+    /// desktop and 63/255 over white, and every faint run (eyebrow, keycaps, the
+    /// footnote's ⓘ) lost ~1 ratio point in the white case. The material's live blur
+    /// survives at 12%, which is enough to keep the surface from reading as flat
+    /// paint; guaranteed legibility for a first-time user outranks the rest of it.
+    static let setupScrim = Color(red: 28 / 255, green: 28 / 255, blue: 32 / 255).opacity(0.88)
+
     // MARK: Type
 
     static let labelSize: CGFloat = 13

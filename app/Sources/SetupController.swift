@@ -160,15 +160,35 @@ final class SetupController: NSObject, NSWindowDelegate {
         )
     }
 
+    /// Size the window to its content, then place it.
+    ///
+    /// The order is load-bearing: `fittingSize` only means anything after a layout
+    /// pass, and both branches below need the FINAL height. Measured on a 2560×1440
+    /// display, the resulting origin is an exact function of the final content
+    /// height across every row state (240pt→y 299, 266→293, 343→273 — one curve), so
+    /// `center()` is genuinely seeing the settled frame rather than racing it.
+    ///
+    /// On a *re*-layout the TOP-LEFT is pinned instead of centering again. Rows
+    /// change height when their guidance text does — a `denied` row wraps to two
+    /// lines, the ready state grows a whole footer — and an NSWindow keeps its
+    /// bottom-left origin, so it grows *upward*: the header would jump out from
+    /// under the reader's eye each time a permission resolved. Recentering instead
+    /// would move the window under their cursor, which is worse.
     private func layout(_ window: SetupWindow) {
         guard let hosting else { return }
+        let wasVisible = window.isVisible
+        let topLeft = NSPoint(x: window.frame.minX, y: window.frame.maxY)
         hosting.rootView = makeRootView()
         hosting.layoutSubtreeIfNeeded()
         let size = hosting.fittingSize
         window.setContentSize(size)
         hosting.frame = window.contentView?.bounds ?? NSRect(origin: .zero, size: size)
-        if !window.isVisible { window.center() }
-        note("setup window: content \(Int(size.width))×\(Int(size.height)), hosting \(hosting.frame)")
+        if wasVisible {
+            window.setFrameTopLeftPoint(topLeft)
+        } else {
+            window.center()
+        }
+        note("setup window: content \(Int(size.width))×\(Int(size.height)), frame \(window.frame)")
     }
 
     // MARK: - NSWindowDelegate

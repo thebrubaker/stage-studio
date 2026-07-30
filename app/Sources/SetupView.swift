@@ -145,6 +145,10 @@ struct SetupView: View {
             footer
         }
         .frame(width: Theme.setupWidth, alignment: .leading)
+        // Order matters: `.background` stacks front-to-back, so the scrim sits
+        // between the content and the material — the only place it can block the
+        // backdrop the material is blending in. See Theme.setupScrim.
+        .background(Theme.setupScrim)
         .background(VisualEffectBackground(material: .hudWindow))
         .background(Theme.pickerTint)
         .fixedSize()
@@ -196,6 +200,7 @@ struct SetupView: View {
                 PermissionRowView(
                     kind: kind,
                     status: model.status(of: kind),
+                    isPrimary: kind == primaryKind,
                     onAction: { onAction(kind, model.status(of: kind)) }
                 )
             }
@@ -207,6 +212,30 @@ struct SetupView: View {
                 .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
         )
         .padding(.horizontal, Theme.setupHPadding)
+    }
+
+    /// The one row the user should deal with next. It gets the window's single
+    /// prominent button and the Return key; every other actionable row is bordered.
+    ///
+    /// This is a guided sequence, not decoration. Two equal blue buttons gave the
+    /// eye no entry point and made Return ambiguous — and macOS wants exactly one
+    /// default button per window. `nil` means nothing is left to do, and Done in the
+    /// footer becomes the default instead.
+    ///
+    /// `needsRelaunch` sorts LAST, not by row order, because it is the step that
+    /// *ends* setup rather than one of the things setup is for. Ranking it by
+    /// position put the loud button on a row already reading "Allowed." while the
+    /// still-ungranted microphone sat quiet below it — and worse, the blue button
+    /// held the same screen position and silently relabelled `Allow…` → `Relaunch`,
+    /// so a user pressing Return twice out of momentum would restart the app instead
+    /// of granting their microphone. (Caught by an adversarial read of the rendered
+    /// states; see 02-screen-relaunch.) Grant everything first, then relaunch once.
+    private var primaryKind: PermissionKind? {
+        let blocking = PermissionKind.allCases.first {
+            let status = model.status(of: $0)
+            return status == .needed || status == .denied
+        }
+        return blocking ?? PermissionKind.allCases.first { model.status(of: $0) == .needsRelaunch }
     }
 
     /// Nothing to say in a state where both rows are still asking — an empty
@@ -262,16 +291,22 @@ struct SetupView: View {
         }
     }
 
-    /// macOS raises its OWN capture-consent dialog the first time a recording
-    /// starts, even with Screen Recording already granted. It surprised Joel, who
-    /// had granted everything — unannounced it reads as the app being broken. It
-    /// can't be pre-empted, so it gets predicted.
+    /// macOS raises its OWN capture-consent dialog when a recording starts, even
+    /// with Screen Recording already granted. It surprised Joel, who had granted
+    /// everything — unannounced it reads as the app being broken. It can't be
+    /// pre-empted, so it gets predicted.
+    ///
+    /// Deliberately makes NO claim about how often. The line used to promise "allow
+    /// it and it won't ask again", and Sequoia-era macOS re-asks on a cadence Apple
+    /// hasn't published — so the reassurance would eventually become evidence the
+    /// app lied, at exactly the moment the user needed to trust it. "May ask" is
+    /// true whatever Apple does next.
     private var forecastLine: some View {
         HStack(alignment: .top, spacing: 7) {
             Image(systemName: "info.circle")
                 .font(.system(size: 11, weight: .regular))
                 .foregroundStyle(Color.white.opacity(0.42))
-            Text("The first time you record, macOS asks once more to confirm. That's expected — allow it and it won't ask again.")
+            Text("When a recording starts, macOS may ask you to confirm. That's macOS being careful with screen access — allow it and the recording begins.")
                 .font(.system(size: Theme.setupBodySize))
                 .foregroundStyle(Theme.textFaint)
                 .fixedSize(horizontal: false, vertical: true)
@@ -291,6 +326,8 @@ struct SetupView: View {
 private struct PermissionRowView: View {
     let kind: PermissionKind
     let status: PermissionStatus
+    /// This is the row to deal with next — see `SetupView.primaryKind`.
+    let isPrimary: Bool
     let onAction: () -> Void
 
     var body: some View {
@@ -337,14 +374,21 @@ private struct PermissionRowView: View {
                     .foregroundStyle(Theme.textFaint)
             }
         default:
-            // Every non-granted row is blocking something, so every one of them
-            // gets the prominent button. A denied row is the MOST blocking of all
-            // — dressing its button as secondary (tried, judged) sent the eye to
-            // the wrong row and left a state with no default control at all.
+            // Exactly one prominent button per window, on the row the user should
+            // handle first. The others are still actionable — just not the answer
+            // to "what do I do now?", and not what Return should press.
             if let title = kind.actionTitle(for: status) {
-                Button(title, action: onAction)
-                    .controlSize(.regular)
-                    .buttonStyle(.borderedProminent)
+                Group {
+                    if isPrimary {
+                        Button(title, action: onAction)
+                            .buttonStyle(.borderedProminent)
+                            .keyboardShortcut(.defaultAction)
+                    } else {
+                        Button(title, action: onAction)
+                            .buttonStyle(.bordered)
+                    }
+                }
+                .controlSize(.regular)
             }
         }
     }
