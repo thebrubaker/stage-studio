@@ -20,7 +20,11 @@ func usage() -> Never {
       StageStudio [--debug-show <surface>] [--debug-midline] [--debug-freeze]
 
     Debug flags (summon a surface deterministically, no hotkey / no recording):
-      --debug-show <surface>     menu | picker | pill-countdown | pill-recording | pill-saved
+      --debug-show <surface>     menu | picker | setup | pill-countdown | pill-recording | pill-saved
+      --debug-screen <state>     setup: force the Screen Recording row
+                                 needed | granted | denied | relaunch
+      --debug-mic <state>        setup: force the Microphone row
+                                 needed | granted | denied
       --debug-capture <png>      screenshot the surface, then quit (self-cleaning)
       --debug-capture-delay <s>  settle time before the shot (default 1.8)
       --debug-timeout <s>        hard teardown for interactive runs (default 25)
@@ -53,6 +57,29 @@ while i < argv.count {
             exit(64)
         }
         options.debugShow = argv[i]
+    case "--debug-screen", "--debug-mic":
+        let flag = argv[i]
+        i += 1
+        guard let status = PermissionStatus.parse(argv[safe: i] ?? "") else {
+            FileHandle.standardError.write(Data(
+                "\(flag) needs one of: needed, granted, denied, relaunch\n".utf8
+            ))
+            exit(64)
+        }
+        if flag == "--debug-screen" {
+            options.debugScreenStatus = status
+        } else {
+            // Microphone access applies to the running process the moment it's
+            // granted — there is no relaunch state to render, and offering one in
+            // the harness would invent a screenshot of something that can't happen.
+            guard status != .needsRelaunch else {
+                FileHandle.standardError.write(Data(
+                    "--debug-mic has no relaunch state (mic grants apply immediately)\n".utf8
+                ))
+                exit(64)
+            }
+            options.debugMicStatus = status
+        }
     case "--debug-midline":
         options.debugMidline = true
     case "--debug-freeze":

@@ -48,6 +48,15 @@ struct LaunchOptions {
     /// measured, so the attribution states are first-class debug surfaces too.
     var debugAgent = false
     var debugLabel = "Claude"
+    /// Force the setup window's permission rows into a given state.
+    ///
+    /// The ungranted states must be renderable WITHOUT revoking a real grant:
+    /// `tccutil reset` on this machine would break the installed app that is in
+    /// daily use, and re-granting is a manual chore. So the states are injected
+    /// here, and the only thing the harness can't prove is TCC's own reporting —
+    /// which stage 2 verifies against the live granted path instead.
+    var debugScreenStatus: PermissionStatus?
+    var debugMicStatus: PermissionStatus?
 }
 
 @MainActor
@@ -58,6 +67,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var session: SessionController?
     private var statusItem: NSStatusItem?
     private var control: ControlServer?
+    private var setup: SetupController?
+    /// The setup window can be dismissed twice on the way out (Done, then
+    /// `windowWillClose` as the app tears down). Debug runs quit on dismissal, so
+    /// the second one must not re-enter `terminate`.
+    private var setupDismissed = false
 
     nonisolated init(options: LaunchOptions) {
         self.options = options
@@ -479,9 +493,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { NSApp.terminate(nil) }
     }
 
+    /// The setup window with its rows forced into whatever state is being judged.
+    /// No permission API is touched on this path — the states come from the flags,
+    /// so a screenshot of "denied" costs nothing and revokes nothing.
+    private func runDebugSetup() {
+        let setup = SetupController()
+        self.setup = setup
+        setup.model.screenRecording = options.debugScreenStatus ?? .needed
+        setup.model.microphone = options.debugMicStatus ?? .needed
+        // A button that reports instead of acting: stage 1 proves the row states
+        // are reachable and legible; what the buttons DO is stage 2.
+        setup.onAction = { kind, status in
+            note("action tapped: \(kind.rawValue) (\(status.rawValue))")
+        }
+        setup.onClose = { [weak self] in
+            guard let self, !self.setupDismissed else { return }
+            self.setupDismissed = true
+            note("setup dismissed")
+            DispatchQueue.main.async { NSApp.terminate(nil) }
+        }
+        setup.show()
+        DispatchQueue.main.async { [self] in
+            note("screen: \(setup.model.screenRecording.rawValue), mic: \(setup.model.microphone.rawValue)")
+            note("window id: \(setup.windowID.map(String.init) ?? "<unavailable>")")
+            note("showing setup — Esc or the close button to dismiss")
+            armCapture { setup.captureRegion }
+        }
+    }
+
     private func runDebugSurface(_ surface: String) {
         if surface == "menu" {
             runDebugMenu()
+            return
+        }
+
+        if surface == "setup" {
+            runDebugSetup()
             return
         }
 
@@ -527,7 +574,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             pill.show(.saved(url: Self.newestRecording(), duration: 42))
         default:
             FileHandle.standardError.write(Data(
-                "stage-studio: unknown --debug-show \(surface). Try: menu, picker, pill-countdown, pill-recording, pill-saved\n".utf8
+                "stage-studio: unknown --debug-show \(surface). Try: menu, picker, setup, pill-countdown, pill-recording, pill-saved\n".utf8
             ))
             exit(64)
         }

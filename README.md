@@ -208,6 +208,12 @@ APP="app/build/Stage Studio.app/Contents/MacOS/StageStudio"
 "$APP" --debug-show pill-saved --debug-hover         # filename's click affordance
 "$APP" --debug-reveal                                # exercise the Finder reveal
 
+# the first-run setup window — every permission state, forced
+"$APP" --debug-show setup --debug-screen needed   --debug-mic needed
+"$APP" --debug-show setup --debug-screen relaunch --debug-mic needed
+"$APP" --debug-show setup --debug-screen denied   --debug-mic denied
+"$APP" --debug-show setup --debug-screen granted  --debug-mic granted  # the ready state
+
 # the status menu — opened for real, with the real history in it
 "$APP" --debug-show menu --debug-capture /tmp/menu.png
 "$APP" --debug-reveal-recent 0    # click its Nth recent item (disabled = no-op)
@@ -221,6 +227,13 @@ APP="app/build/Stage Studio.app/Contents/MacOS/StageStudio"
 "$APP" --debug-record "Safari" --debug-record-seconds 3 \
        --debug-record-output /tmp/take.mp4   # somewhere disposable
 ```
+
+`--debug-screen` / `--debug-mic` **inject** the row states rather than reading TCC,
+and that is the point: the alternative — `tccutil reset ScreenCapture
+io.digitalpine.stage-studio` — revokes the grant the installed app runs on, and
+re-granting is a manual chore for a screenshot. The ungranted states are rendered,
+never provoked. (`--debug-mic relaunch` is rejected: a mic grant applies to the
+running process immediately, so that state cannot exist.)
 
 `app/tools/inkbox` measures where text ink actually sits relative to a row's
 midline in a screenshot, so "optically centered" stays a number rather than an

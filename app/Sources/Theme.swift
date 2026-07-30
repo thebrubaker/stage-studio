@@ -55,6 +55,22 @@ enum Theme {
     }
     static let pickerShadowMargin: CGFloat = 40
 
+    // MARK: Setup window metrics
+
+    /// Narrower than the picker (600): two rows of text, not a grid of thumbnails.
+    static let setupWidth: CGFloat = 460
+    static let setupHPadding: CGFloat = 20
+    /// Optical, not equal-to-the-sides: see the note at its use site.
+    static let setupBottomPadding: CGFloat = 28
+    /// The window is `.fullSizeContentView` with a transparent titlebar, so the
+    /// traffic lights float OVER the content. Content starts below them.
+    static let setupTitlebarInset: CGFloat = 30
+    static let setupIconTile: CGFloat = 28
+    /// The one type step the pill/picker didn't need: a window with a real title.
+    /// Kept adjacent to the existing 10–13 ramp rather than starting a new scale.
+    static let setupTitleSize: CGFloat = 15
+    static let setupBodySize: CGFloat = 11.5
+
     // MARK: Type
 
     static let labelSize: CGFloat = 13
