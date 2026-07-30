@@ -37,9 +37,16 @@ final class RecentRecordings {
         self.entries = Self.load(from: storeURL)
     }
 
+    /// `~/Library/Application Support/Windowclip/recents.json`.
+    ///
+    /// The 2026-07-30 rename moved this out of `.../Stage Studio/`, and the old
+    /// list is deliberately NOT migrated. It is five file paths for one installed
+    /// user, and the rename exists precisely so the app can be met fresh — a
+    /// first run that opens with someone else's recents is the wrong first run.
+    /// The stale directory is harmless; delete it by hand if it bothers you.
     nonisolated static var defaultStoreURL: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Stage Studio", isDirectory: true)
+            .appendingPathComponent("Windowclip", isDirectory: true)
         return base.appendingPathComponent("recents.json")
     }
 

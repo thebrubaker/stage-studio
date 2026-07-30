@@ -1,10 +1,10 @@
 {
-  "name": "stage-studio",
+  "name": "windowclip",
   "version": "0.0.1",
   "private": true,
   "type": "module",
   "bin": {
-    "stage-studio": "./src/cli.ts"
+    "windowclip": "./src/cli.ts"
   },
   "scripts": {
     "build:clicks": "swiftc -O -target arm64-apple-macosx15.0 cmd/clicks/main.swift -o cmd/clicks/clicks",

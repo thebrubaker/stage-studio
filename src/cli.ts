@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// stage-studio — record screen + clicks + mic, render polished MP4 with auto-zoom on each click.
+// windowclip — record screen + clicks + mic, render polished MP4 with auto-zoom on each click.
 //
 // Phase 2: ugly end-to-end with a small set of CLI flags. Hardcodes a few things still:
 //   - output resolution 2560x1440 (matches CGEventTap point space on a 5K display)
@@ -23,7 +23,7 @@ const RECORDER_BIN = resolve(REPO_ROOT, "cmd/recorder/recorder");
 const FPS = 30;
 
 // ---------------------------------------------------------------------------
-// Control surface — talking to the running Stage Studio app (DIG-793)
+// Control surface — talking to the running Windowclip app (DIG-793)
 //
 // Recording routes through the app by default so that EVERY recording, however
 // it was started, puts the pill on screen. That visibility is the point: an
@@ -34,10 +34,10 @@ const FPS = 30;
 // GUI session to talk to.
 // ---------------------------------------------------------------------------
 
-const APP_PATH = "/Applications/Stage Studio.app";
+const APP_PATH = "/Applications/Windowclip.app";
 const CONTROL_SOCKET = resolve(
   homedir(),
-  "Library/Application Support/Stage Studio/control.sock",
+  "Library/Application Support/Windowclip/control.sock",
 );
 
 type ControlResponse = {
@@ -96,11 +96,11 @@ async function ensureApp(): Promise<void> {
   if (await appIsUp()) return;
   if (!existsSync(APP_PATH)) {
     throw new Error(
-      `Stage Studio isn't installed at ${APP_PATH}. Build and install it with ` +
+      `Windowclip isn't installed at ${APP_PATH}. Build and install it with ` +
         `\`pnpm run build:app\`, or use --headless to bypass the app entirely.`,
     );
   }
-  console.error(`[stage-studio] launching ${basename(APP_PATH)}…`);
+  console.error(`[windowclip] launching ${basename(APP_PATH)}…`);
   spawn("open", ["-a", APP_PATH], { stdio: "ignore", detached: true }).unref();
 
   const deadline = Date.now() + 15_000;
@@ -108,7 +108,7 @@ async function ensureApp(): Promise<void> {
     await new Promise((r) => setTimeout(r, 300));
     if (await appIsUp()) return;
   }
-  throw new Error("Stage Studio did not come up within 15s");
+  throw new Error("Windowclip did not come up within 15s");
 }
 
 // Exponential smoothing time constant for cursor → camera. Camera position lags
@@ -163,12 +163,12 @@ function parseArgs(argv: string[]): Args {
     label: "Claude",
     source: "agent",
   };
-  // Control subcommands: `stage-studio stop|cancel|status`.
+  // Control subcommands: `windowclip stop|cancel|status`.
   if (argv[0] === "stop" || argv[0] === "cancel" || argv[0] === "status") {
     args.controlCommand = argv[0];
     return args;
   }
-  // Accept `stage-studio list-windows` as a bare subcommand (no leading dashes).
+  // Accept `windowclip list-windows` as a bare subcommand (no leading dashes).
   // Strictly positional: it has to be the first arg. Anything else falls through
   // to the regular flag parser, including `--list-windows` for symmetry.
   if (argv[0] === "list-windows" || argv[0] === "--list-windows") {
@@ -187,17 +187,17 @@ function parseArgs(argv: string[]): Args {
     else if (a === "--label") args.label = argv[++i];
     else if (a === "--source") args.source = argv[++i] === "human" ? "human" : "agent";
     else if (a === "-h" || a === "--help") {
-      console.log(`stage-studio — record a window + render polished MP4
+      console.log(`windowclip — record a window + render polished MP4
 
-Recordings route through the Stage Studio app by default, so every recording
+Recordings route through the Windowclip app by default, so every recording
 shows the on-screen pill and can be stopped by hand (Esc / click / ⌥⌘R).
 
 Usage:
-  stage-studio [options]              start a recording (default)
-  stage-studio stop                   stop the running recording, print the file
-  stage-studio cancel                 abort and delete the partial file
-  stage-studio status                 print what the app is doing, as JSON
-  stage-studio list-windows           print on-screen windows as JSON and exit
+  windowclip [options]              start a recording (default)
+  windowclip stop                   stop the running recording, print the file
+  windowclip cancel                 abort and delete the partial file
+  windowclip status                 print what the app is doing, as JSON
+  windowclip list-windows           print on-screen windows as JSON and exit
 
 Recording options:
   -t, --duration <s>    recording duration in seconds, or 0 for open-ended
@@ -209,7 +209,7 @@ Recording options:
   -w, --window <pat>    target window pattern (case-insensitive substring of
                         app+title; default: frontmost non-terminal window)
       --window-id <N>   target specific CGWindowID (numeric). Use this when
-                        you have an exact id from \`stage-studio list-windows\`.
+                        you have an exact id from \`windowclip list-windows\`.
       --label <name>    who the pill credits for the recording (default Claude)
       --source <who>    agent (default) or human — picks the pill's treatment
       --headless        bypass the app: spawn the recorder directly, no pill.
@@ -217,7 +217,7 @@ Recording options:
   -h, --help            this help
 
   When --duration 0 is used, the recorder PID is printed to stdout as:
-    [stage-studio] recorder PID: <pid>
+    [windowclip] recorder PID: <pid>
   Send SIGTERM to that PID to stop the recording cleanly.
 `);
       process.exit(0);
@@ -389,7 +389,7 @@ async function record(args: Args, windowID: number, outputPath: string, workDir:
 
   // Spawn click recorder first — its first stdout line is the display meta breadcrumb
   // (point dims + backing scale), which we need afterward to translate click coords.
-  console.error(`[stage-studio] starting input recorder…`);
+  console.error(`[windowclip] starting input recorder…`);
   const clicksProc = spawn(CLICKS_BIN, [], { stdio: ["ignore", "pipe", "pipe"] });
   writeFileSync(clicksPath, "");
   const clicksOut = Bun.file(clicksPath).writer();
@@ -399,7 +399,7 @@ async function record(args: Args, windowID: number, outputPath: string, workDir:
   await new Promise((r) => setTimeout(r, 400));
 
   spawn("afplay", ["/System/Library/Sounds/Tink.aiff"], { stdio: "ignore" });
-  console.error(`\n[stage-studio] >>> RECORDING ${args.duration}s <<<\n`);
+  console.error(`\n[windowclip] >>> RECORDING ${args.duration}s <<<\n`);
   // Lock t0 right before recorder spawn. SCK first-frame latency is typically
   // smaller than ffmpeg's (~100-200ms vs ~200-500ms) but still nonzero.
   const t0Epoch = Date.now() / 1000;
@@ -426,7 +426,7 @@ async function record(args: Args, windowID: number, outputPath: string, workDir:
   // Surface the recorder's PID so Claude (or any external controller) can
   // SIGTERM it when the user says "stop". Print in a machine-parseable form.
   if (recorderProc.pid !== undefined) {
-    console.log(`[stage-studio] recorder PID: ${recorderProc.pid}`);
+    console.log(`[windowclip] recorder PID: ${recorderProc.pid}`);
   }
   // Forward our own SIGTERM/SIGINT to the recorder so foreground Ctrl-C and
   // sigterm-to-cli both work as a clean stop.
@@ -471,24 +471,24 @@ async function recordViaApp(args: Args) {
     if (started.error === "busy") {
       // Never queue, never preempt — whoever owns the pill owns the machine.
       console.error(
-        `[stage-studio] busy: a ${started.state} session is already running. ` +
-          `Stop it first (\`stage-studio stop\`, Esc, or ⌥⌘R).`,
+        `[windowclip] busy: a ${started.state} session is already running. ` +
+          `Stop it first (\`windowclip stop\`, Esc, or ⌥⌘R).`,
       );
       process.exit(3);
     }
     if (started.cancelled) {
-      console.error(`[stage-studio] cancelled during the countdown — nothing recorded.`);
+      console.error(`[windowclip] cancelled during the countdown — nothing recorded.`);
       process.exit(4);
     }
-    console.error(`[stage-studio] could not start: ${started.error ?? "unknown"}${started.message ? ` — ${started.message}` : ""}`);
+    console.error(`[windowclip] could not start: ${started.error ?? "unknown"}${started.message ? ` — ${started.message}` : ""}`);
     process.exit(1);
   }
 
-  console.log(`[stage-studio] recording → ${started.output}`);
+  console.log(`[windowclip] recording → ${started.output}`);
 
   if (args.duration <= 0) {
-    // Open-ended: hand control back. Stop with `stage-studio stop`, or by hand.
-    console.error(`[stage-studio] open-ended — stop with \`stage-studio stop\` (or Esc / ⌥⌘R).`);
+    // Open-ended: hand control back. Stop with `windowclip stop`, or by hand.
+    console.error(`[windowclip] open-ended — stop with \`windowclip stop\` (or Esc / ⌥⌘R).`);
     return;
   }
 
@@ -506,22 +506,22 @@ function reportStop(res: ControlResponse, requested?: number) {
   if (res.cancelled) {
     // The user's physical controls outrank the caller's request, and the caller
     // is told plainly rather than being handed a missing file to puzzle over.
-    console.error(`[stage-studio] the recording was stopped by hand — no file written.`);
+    console.error(`[windowclip] the recording was stopped by hand — no file written.`);
     process.exit(4);
   }
   if (!res.ok) {
-    console.error(`[stage-studio] stop failed: ${res.error ?? "unknown"}`);
+    console.error(`[windowclip] stop failed: ${res.error ?? "unknown"}`);
     process.exit(1);
   }
   const seconds = res.duration ? ` (${res.duration.toFixed(1)}s)` : "";
-  console.log(`[stage-studio] saved ${res.output}${seconds}`);
+  console.log(`[windowclip] saved ${res.output}${seconds}`);
   // Half a second of slack: a take ends on a frame boundary, not exactly on the
   // deadline. Anything beyond that is the recording being materially shorter
   // than asked for, and the user should hear it from us rather than discover it
   // in the file.
   if (requested && requested > 0 && res.duration && res.duration < requested - 0.5) {
     console.error(
-      `[stage-studio] warning: asked for ${requested}s but the file is ` +
+      `[windowclip] warning: asked for ${requested}s but the file is ` +
         `${res.duration.toFixed(1)}s — the recording is short.`,
     );
   }
@@ -529,7 +529,7 @@ function reportStop(res: ControlResponse, requested?: number) {
 
 async function runControlCommand(command: "stop" | "cancel" | "status") {
   if (!(await appIsUp())) {
-    console.error(`[stage-studio] Stage Studio isn't running — nothing to ${command}.`);
+    console.error(`[windowclip] Windowclip isn't running — nothing to ${command}.`);
     process.exit(2);
   }
   const res = await control({ command });
@@ -538,7 +538,7 @@ async function runControlCommand(command: "stop" | "cancel" | "status") {
     return;
   }
   if (command === "cancel") {
-    console.log(`[stage-studio] cancelled${res.ok ? "" : ` (${res.error})`}`);
+    console.log(`[windowclip] cancelled${res.ok ? "" : ` (${res.error})`}`);
     return;
   }
   reportStop(res);
@@ -556,7 +556,7 @@ async function main() {
     // Thin pass-through to the windows binary. Inherits stdio so callers get
     // the raw JSON array on stdout and any errors on stderr.
     if (!existsSync(WINDOWS_BIN)) {
-      console.error(`[stage-studio] windows binary missing at ${WINDOWS_BIN} — run \`pnpm run build:windows\``);
+      console.error(`[windowclip] windows binary missing at ${WINDOWS_BIN} — run \`pnpm run build:windows\``);
       process.exit(1);
     }
     const proc = spawn(WINDOWS_BIN, ["list"], { stdio: "inherit" });
@@ -571,15 +571,15 @@ async function main() {
   }
 
   if (!existsSync(CLICKS_BIN)) {
-    console.error(`[stage-studio] clicks binary missing at ${CLICKS_BIN} — run \`pnpm run build:clicks\``);
+    console.error(`[windowclip] clicks binary missing at ${CLICKS_BIN} — run \`pnpm run build:clicks\``);
     process.exit(1);
   }
   if (!existsSync(RECORDER_BIN)) {
-    console.error(`[stage-studio] recorder binary missing at ${RECORDER_BIN} — run \`pnpm run build:recorder\``);
+    console.error(`[windowclip] recorder binary missing at ${RECORDER_BIN} — run \`pnpm run build:recorder\``);
     process.exit(1);
   }
   if (!existsSync(WINDOWS_BIN)) {
-    console.error(`[stage-studio] windows binary missing at ${WINDOWS_BIN} — run \`pnpm run build:windows\``);
+    console.error(`[windowclip] windows binary missing at ${WINDOWS_BIN} — run \`pnpm run build:windows\``);
     process.exit(1);
   }
 
@@ -590,10 +590,10 @@ async function main() {
   // content (occlusion-immune); recorder composites onto a styled background
   // and writes the final MP4 directly. No post-recording stage.
   const windowInfo = await detectWindow({ pattern: args.window, windowId: args.windowId });
-  console.error(`[stage-studio] target window: "${windowInfo.title}" (${windowInfo.app}) ${windowInfo.bounds.w}x${windowInfo.bounds.h} @ (${windowInfo.bounds.x}, ${windowInfo.bounds.y})`);
+  console.error(`[windowclip] target window: "${windowInfo.title}" (${windowInfo.app}) ${windowInfo.bounds.w}x${windowInfo.bounds.h} @ (${windowInfo.bounds.x}, ${windowInfo.bounds.y})`);
 
   if (args.skipRecord) {
-    console.error(`[stage-studio] --skip-record: no longer supported in v3 (no intermediate stage to reuse). Re-record.`);
+    console.error(`[windowclip] --skip-record: no longer supported in v3 (no intermediate stage to reuse). Re-record.`);
     process.exit(1);
   }
 
@@ -607,11 +607,11 @@ async function main() {
   const smoothed = smoothCursor(cursor, CURSOR_SMOOTH_TAU);
   const committed = commitClicks(clicks, smoothed);
 
-  console.error(`[stage-studio] ${committed.length}/${clicks.length} click(s) committed, ${cursor.length} cursor sample(s) (overlay TBD)`);
-  console.error(`[stage-studio] wrote ${outputPath}`);
+  console.error(`[windowclip] ${committed.length}/${clicks.length} click(s) committed, ${cursor.length} cursor sample(s) (overlay TBD)`);
+  console.error(`[windowclip] wrote ${outputPath}`);
 }
 
 main().catch((err) => {
-  console.error(`[stage-studio] error: ${err.message}`);
+  console.error(`[windowclip] error: ${err.message}`);
   process.exit(1);
 });

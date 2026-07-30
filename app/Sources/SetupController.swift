@@ -110,7 +110,7 @@ final class SetupController: NSObject, NSWindowDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "Stage Studio Setup"
+        window.title = "Windowclip Setup"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         // Otherwise AppKit rules a hairline across the window under the traffic

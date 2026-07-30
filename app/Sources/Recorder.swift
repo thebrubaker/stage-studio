@@ -50,7 +50,7 @@ final class Recorder {
     /// app in /Applications has no repo, which is exactly why the bundled copies
     /// below are consulted first.
     static var repoRoot: URL {
-        if let override = ProcessInfo.processInfo.environment["STAGE_STUDIO_ROOT"] {
+        if let override = ProcessInfo.processInfo.environment["WINDOWCLIP_ROOT"] {
             return URL(fileURLWithPath: override)
         }
         return Bundle.main.bundleURL
@@ -165,8 +165,8 @@ final class Recorder {
             while let newline = buffer.firstIndex(of: 0x0A) {
                 let line = String(decoding: buffer[buffer.startIndex..<newline], as: UTF8.self)
                 buffer.removeSubrange(buffer.startIndex...newline)
-                guard line.hasPrefix("stage-studio:") else { continue }
-                let event = String(line.dropFirst("stage-studio:".count))
+                guard line.hasPrefix("windowclip:") else { continue }
+                let event = String(line.dropFirst("windowclip:".count))
                 Task { @MainActor [weak self] in self?.handleLifecycle(event) }
             }
         }

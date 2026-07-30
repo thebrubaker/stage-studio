@@ -1,4 +1,4 @@
-// stage-studio hotkey recorder — LSUIElement agent app.
+// windowclip hotkey recorder — LSUIElement agent app.
 //
 // Global hotkey → window picker → countdown → record → stop pill. The recording
 // itself is delegated to the existing `cmd/recorder` binary; this app is the
@@ -14,10 +14,10 @@ extension Array {
 
 func usage() -> Never {
     let text = """
-    stage-studio hotkey recorder
+    windowclip hotkey recorder
 
     Usage:
-      StageStudio [--debug-show <surface>] [--debug-midline] [--debug-freeze]
+      Windowclip [--debug-show <surface>] [--debug-midline] [--debug-freeze]
 
     Debug flags (summon a surface deterministically, no hotkey / no recording):
       --debug-show <surface>     menu | picker | setup | gate |

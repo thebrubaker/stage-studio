@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build the stage-studio hotkey recorder into an unsigned .app bundle.
+# Build the windowclip hotkey recorder into an unsigned .app bundle.
 #
 # A bundle (rather than a bare binary) is what gives the app a stable TCC identity
 # for Screen Recording / Microphone — a raw swiftc binary would inherit the
@@ -11,13 +11,13 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
-APP="$HERE/build/Stage Studio.app"
+APP="$HERE/build/Windowclip.app"
 
 # Developer ID, not ad-hoc. TCC keys a grant to the code-signing identity, so an
 # ad-hoc signature (whose identity changes every build) makes macOS treat each
 # rebuild as a brand-new app and forget every permission. A real signing identity
 # plus a frozen bundle id is what makes a grant stick.
-SIGN_ID="${STAGE_STUDIO_SIGN_ID:-Developer ID Application: Joel Brubaker (UQ27DB7N8K)}"
+SIGN_ID="${WINDOWCLIP_SIGN_ID:-Developer ID Application: Joel Brubaker (UQ27DB7N8K)}"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -42,7 +42,7 @@ printf 'APPL????' > "$APP/Contents/PkgInfo"
 swiftc -O \
   -target arm64-apple-macosx15.0 \
   "$HERE"/Sources/*.swift \
-  -o "$APP/Contents/MacOS/StageStudio"
+  -o "$APP/Contents/MacOS/Windowclip"
 
 # --- App icon -------------------------------------------------------------
 # icon-master.png is the source art inset to the macOS icon grid (824 of 1024,
@@ -77,7 +77,7 @@ fi
 # --options runtime (hardened runtime) is required for notarization later. It
 # also gates microphone access behind an entitlement, hence the entitlements
 # file on BOTH binaries.
-ENTS="$HERE/Resources/StageStudio.entitlements"
+ENTS="$HERE/Resources/Windowclip.entitlements"
 SIGN_FLAGS=(--force --options runtime --timestamp --entitlements "$ENTS" --sign "$SIGN_ID")
 
 if [[ -f "$APP/Contents/MacOS/recorder" ]]; then

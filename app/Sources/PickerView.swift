@@ -55,7 +55,7 @@ struct PickerView: View {
                 .textCase(.uppercase)
                 .foregroundStyle(Color.white.opacity(0.40))
             Spacer()
-            Text("stage-studio")
+            Text("windowclip")
                 .font(.system(size: 10, weight: .regular, design: .monospaced))
                 .foregroundStyle(Color.white.opacity(0.25))
         }

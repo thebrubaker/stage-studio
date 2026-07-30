@@ -1,6 +1,6 @@
 // SetupView — the first-run permissions gate.
 //
-// Stage Studio is LSUIElement: it has no window at all in normal operation. This
+// Windowclip is LSUIElement: it has no window at all in normal operation. This
 // is the ONE exception, and it exists because a user without Screen Recording or
 // Microphone grants gets silent degradation with nothing to read. It appears only
 // when something is missing (or on demand from the status menu), states what is
@@ -94,7 +94,7 @@ enum PermissionKind: String, CaseIterable {
 
     /// A row whose grant exists but hasn't reached this process.
     ///
-    /// Deliberately NOT an imperative. "Restart Stage Studio to start using it"
+    /// Deliberately NOT an imperative. "Restart Windowclip to start using it"
     /// instructed the user to restart, and then the button hierarchy demoted the
     /// Restart button to secondary — so reading top-down you hit an order followed
     /// by a greyed-out control, which reads as the app contradicting itself. This
@@ -193,7 +193,7 @@ struct SetupView: View {
                 .textCase(.uppercase)
                 .foregroundStyle(Color.white.opacity(0.40))
             Spacer()
-            Text("stage-studio")
+            Text("windowclip")
                 .font(.system(size: 10, weight: .regular, design: .monospaced))
                 .foregroundStyle(Color.white.opacity(0.25))
         }
@@ -203,7 +203,7 @@ struct SetupView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(model.isReady ? "Stage Studio is ready" : "Stage Studio needs your permission")
+            Text(model.isReady ? "Windowclip is ready" : "Windowclip needs your permission")
                 .font(.system(size: Theme.setupTitleSize, weight: .semibold))
                 .foregroundStyle(Color.white.opacity(0.92))
             Text(

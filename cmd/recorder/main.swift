@@ -1,4 +1,4 @@
-// stage-studio recorder — captures a single macOS window with ScreenCaptureKit,
+// windowclip recorder — captures a single macOS window with ScreenCaptureKit,
 // composites it onto a styled background via Core Image, and writes a finished
 // H.264 MP4 with optional mic audio.
 //
@@ -23,9 +23,9 @@
 //                              arrives, and lifecycle lines are written to
 //                              stdout so the controller can tell warm-up from
 //                              recording:
-//                                stage-studio:armed      capture is live and
+//                                windowclip:armed      capture is live and
 //                                                        real frames are arriving
-//                                stage-studio:capturing  the take has begun
+//                                windowclip:capturing  the take has begun
 //                              This exists so a caller can pay the (variable,
 //                              occasionally multi-second) start-up cost BEFORE
 //                              the user's clock starts, instead of subtracting
@@ -85,7 +85,7 @@ let STARTUP_WATCHDOG_S: Double = 60
 /// "ready" without polling.
 func emitLifecycle(_ event: String) {
     guard handshake else { return }
-    FileHandle.standardOutput.write(Data("stage-studio:\(event)\n".utf8))
+    FileHandle.standardOutput.write(Data("windowclip:\(event)\n".utf8))
 }
 
 /// The take gate. Capture may be running (warming SCK, CoreAudio, the encoder)
@@ -166,7 +166,7 @@ func loadBackgroundImage(path: String, width: Int, height: Int) -> CIImage? {
     return positioned.cropped(to: CGRect(x: 0, y: 0, width: outW, height: outH))
 }
 
-/// Builds the styled background CIImage that frames every stage-studio recording.
+/// Builds the styled background CIImage that frames every windowclip recording.
 ///
 /// Uses SwiftUI's `MeshGradient` (Sequoia+) for a tasteful warm-tone field
 /// that recedes behind the recorded window. A 3x3 mesh gives enough control
@@ -527,7 +527,7 @@ func setupAudioCapture(recorder: Recorder) throws -> AVCaptureSession {
     session.addInput(input)
 
     let output = AVCaptureAudioDataOutput()
-    let queue = DispatchQueue(label: "stage-studio.recorder.audio", qos: .userInteractive)
+    let queue = DispatchQueue(label: "windowclip.recorder.audio", qos: .userInteractive)
     output.setSampleBufferDelegate(recorder, queue: queue)
     guard session.canAddOutput(output) else {
         throw NSError(domain: "recorder", code: 12, userInfo: [NSLocalizedDescriptionKey: "can't add audio output"])
@@ -594,7 +594,7 @@ func run() async throws {
     let recorder = try Recorder(outputURL: outputURL, outputW: outW, outputH: outH, withAudio: captureAudio, composer: composer)
 
     let stream = SCStream(filter: filter, configuration: config, delegate: recorder)
-    let videoQueue = DispatchQueue(label: "stage-studio.recorder.video", qos: .userInteractive)
+    let videoQueue = DispatchQueue(label: "windowclip.recorder.video", qos: .userInteractive)
     try stream.addStreamOutput(recorder, type: .screen, sampleHandlerQueue: videoQueue)
 
     var audioSession: AVCaptureSession? = nil

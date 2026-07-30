@@ -17,24 +17,24 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP="$HERE/build/Stage Studio.app"
+APP="$HERE/build/Windowclip.app"
 DIST="$HERE/dist"
-DMG="$DIST/Stage-Studio.dmg"
-VOL="Stage Studio"
+DMG="$DIST/Windowclip.dmg"
+VOL="Windowclip"
 
-SIGN_ID="${STAGE_STUDIO_SIGN_ID:-Developer ID Application: Joel Brubaker (UQ27DB7N8K)}"
+SIGN_ID="${WINDOWCLIP_SIGN_ID:-Developer ID Application: Joel Brubaker (UQ27DB7N8K)}"
 
 # A notarytool keychain profile is scoped to the Apple *account*, not to an app,
 # so one profile notarizes every app you ship. Set this to whichever profile
 # already exists on the machine:
 #
-#   xcrun notarytool history --keychain-profile "$STAGE_STUDIO_NOTARY_PROFILE"
+#   xcrun notarytool history --keychain-profile "$WINDOWCLIP_NOTARY_PROFILE"
 #
 # To create one, the account holder runs this themselves (it stores an
 # app-specific password from account.apple.com in the keychain):
 #
 #   xcrun notarytool store-credentials <profile> --apple-id <id> --team-id <team>
-NOTARY_PROFILE="${STAGE_STUDIO_NOTARY_PROFILE:-stage-studio}"
+NOTARY_PROFILE="${WINDOWCLIP_NOTARY_PROFILE:-windowclip}"
 
 if [[ ! -d "$APP" ]]; then
   echo "no app bundle at $APP — run ./app/build.sh first" >&2

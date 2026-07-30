@@ -5,18 +5,24 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleExecutable</key>
-	<string>StageStudio</string>
-	<!-- FROZEN. This string is the key TCC files every permission grant under.
-	     Changing it makes macOS treat the app as brand new and forget Screen
-	     Recording + Microphone. It does not change again. -->
+	<string>Windowclip</string>
+	<!-- FROZEN at io.digitalpine.windowclip. This string is the key TCC files
+	     every permission grant under. Changing it makes macOS treat the app as
+	     brand new and forget Screen Recording + Microphone.
+
+	     It changed exactly once, deliberately: the 2026-07-30 rename from
+	     "Stage Studio" (io.digitalpine.stage-studio) to Windowclip. That change
+	     forfeited the old grants on purpose — the owner wanted to walk the
+	     first-run permission flow again from scratch and record it. There is no
+	     second reason. It does not change again. -->
 	<key>CFBundleIdentifier</key>
-	<string>io.digitalpine.stage-studio</string>
+	<string>io.digitalpine.windowclip</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Stage Studio</string>
+	<string>Windowclip</string>
 	<key>CFBundleDisplayName</key>
-	<string>Stage Studio</string>
+	<string>Windowclip</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundlePackageType</key>
@@ -38,6 +44,6 @@
 	<!-- The app spawns cmd/recorder, which captures mic audio; TCC attributes the
 	     child's request to this bundle as the responsible process. -->
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Stage Studio records your microphone as the voiceover track of a screen recording.</string>
+	<string>Windowclip records your microphone as the voiceover track of a screen recording.</string>
 </dict>
 </plist>

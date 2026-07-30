@@ -3,7 +3,7 @@
 // Every surface must be summonable deterministically, without a hotkey and
 // without a real recording, so it can be screenshotted and judged:
 //
-//   StageStudio.app/Contents/MacOS/StageStudio --debug-show pill-recording
+//   Windowclip.app/Contents/MacOS/Windowclip --debug-show pill-recording
 //
 // In debug mode the app prints the CGWindowID of each surface it puts on screen,
 // so `screencapture -l <id>` targets the REAL rendered window.
@@ -167,7 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // A hotkey we couldn't claim means the app silently does nothing —
             // say so rather than sitting there looking alive.
             FileHandle.standardError.write(Data(
-                "stage-studio: could not register ⌥⌘R — another app is probably holding it.\n".utf8
+                "windowclip: could not register ⌥⌘R — another app is probably holding it.\n".utf8
             ))
         }
 
@@ -198,7 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             control = server
         } catch {
             FileHandle.standardError.write(Data(
-                "stage-studio: control socket unavailable: \(error.localizedDescription)\n".utf8
+                "windowclip: control socket unavailable: \(error.localizedDescription)\n".utf8
             ))
         }
     }
@@ -274,7 +274,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = NSImage(
             systemSymbolName: "record.circle",
-            accessibilityDescription: "Stage Studio"
+            accessibilityDescription: "Windowclip"
         )
         let menu = NSMenu()
         // The recents section decides its own enablement (a file that has moved
@@ -340,7 +340,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
         menu.addItem(
-            NSMenuItem(title: "Quit Stage Studio", action: #selector(NSApp.terminate(_:)), keyEquivalent: "q")
+            NSMenuItem(title: "Quit Windowclip", action: #selector(NSApp.terminate(_:)), keyEquivalent: "q")
         )
     }
 
@@ -404,7 +404,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         guard let window = match else {
             FileHandle.standardError.write(Data(
-                "stage-studio: no window matched \"\(target)\" among \(windows.count) on screen\n".utf8
+                "windowclip: no window matched \"\(target)\" among \(windows.count) on screen\n".utf8
             ))
             exit(2)
         }
@@ -448,7 +448,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         // Backstop: never leave a recorder running because a phase never arrived.
         DispatchQueue.main.asyncAfter(deadline: .now() + options.debugRecordSeconds + 30) {
-            FileHandle.standardError.write(Data("stage-studio: end-to-end timed out\n".utf8))
+            FileHandle.standardError.write(Data("windowclip: end-to-end timed out\n".utf8))
             NSApp.terminate(nil)
         }
     }
@@ -490,7 +490,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private nonisolated static func reportCapture(_ path: String, describedAs what: String) {
         let attributes = try? FileManager.default.attributesOfItem(atPath: path)
         guard let bytes = attributes?[.size] as? Int, bytes > 0 else {
-            let message = "stage-studio: capture FAILED — nothing written to \(path)"
+            let message = "windowclip: capture FAILED — nothing written to \(path)"
                 + " (\(what)). Does its directory exist?\n"
             FileHandle.standardError.write(Data(message.utf8))
             return
@@ -544,7 +544,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         armMenuCapture()
         DispatchQueue.main.async { [self] in
-            note("opening the status menu — Ctrl-C or `pkill -f StageStudio` to dismiss")
+            note("opening the status menu — Ctrl-C or `pkill -f Windowclip` to dismiss")
             statusItem?.button?.performClick(nil)
         }
     }
@@ -558,7 +558,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     Self.captureWindow(id, to: path)
                 } else {
                     FileHandle.standardError.write(Data(
-                        "stage-studio: no open menu window to capture\n".utf8
+                        "windowclip: no open menu window to capture\n".utf8
                     ))
                 }
             }
@@ -616,7 +616,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }) else {
             let titles = menu.items.map(\.title).filter { !$0.isEmpty }
             FileHandle.standardError.write(Data(
-                "stage-studio: no menu item matching \"\(needle)\" among \(titles)\n".utf8
+                "windowclip: no menu item matching \"\(needle)\" among \(titles)\n".utf8
             ))
             exit(2)
         }
@@ -644,7 +644,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let recents = menu.items.filter { $0.representedObject is URL }
         guard let item = recents[safe: index] else {
             FileHandle.standardError.write(Data(
-                "stage-studio: no recent item at index \(index) (have \(recents.count))\n".utf8
+                "windowclip: no recent item at index \(index) (have \(recents.count))\n".utf8
             ))
             exit(2)
         }
@@ -880,7 +880,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "dark": fill = NSColor(calibratedWhite: 0.10, alpha: 1)
         default:
             FileHandle.standardError.write(Data(
-                "stage-studio: unknown --debug-backdrop \(name). Try: white, light, dark\n".utf8
+                "windowclip: unknown --debug-backdrop \(name). Try: white, light, dark\n".utf8
             ))
             exit(64)
         }
@@ -961,7 +961,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             pill.show(.saved(url: Self.newestRecording(), duration: 42))
         default:
             FileHandle.standardError.write(Data(
-                "stage-studio: unknown --debug-show \(surface). Try: menu, picker, setup, gate, pill-countdown, pill-recording, pill-saved\n".utf8
+                "windowclip: unknown --debug-show \(surface). Try: menu, picker, setup, gate, pill-countdown, pill-recording, pill-saved\n".utf8
             ))
             exit(64)
         }
@@ -970,7 +970,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // turn over once so the id we print is the real one.
         DispatchQueue.main.async { [self] in
             note("window id: \(pill.windowID.map(String.init) ?? "<unavailable>")")
-            note("showing \(surface) — Ctrl-C or `pkill -f StageStudio` to dismiss")
+            note("showing \(surface) — Ctrl-C or `pkill -f Windowclip` to dismiss")
             armCapture { pill.captureRegion }
         }
     }
@@ -982,7 +982,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let path = options.debugCapture {
             DispatchQueue.main.asyncAfter(deadline: .now() + options.debugCaptureDelay) {
                 guard let region = region() else {
-                    FileHandle.standardError.write(Data("stage-studio: no capture region\n".utf8))
+                    FileHandle.standardError.write(Data("windowclip: no capture region\n".utf8))
                     NSApp.terminate(nil)
                     return
                 }
@@ -1000,6 +1000,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 }
 
 func note(_ message: String) {
-    print("[stage-studio] \(message)")
+    print("[windowclip] \(message)")
     fflush(stdout)
 }

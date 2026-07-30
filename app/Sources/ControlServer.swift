@@ -4,7 +4,7 @@
 // response back, then close.
 //
 // Why a socket and not the obvious alternatives:
-//   - URL scheme (stage-studio://…) is one-way. The caller needs to learn
+//   - URL scheme (windowclip://…) is one-way. The caller needs to learn
 //     "started" vs "user cancelled" vs "busy", and a URL can't tell it.
 //   - Localhost HTTP would work, but binding a TCP port can raise the macOS
 //     firewall prompt — and this app's whole permission story is "no new
@@ -41,7 +41,7 @@ final class ControlServer {
 
     static var socketURL: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Stage Studio", isDirectory: true)
+            .appendingPathComponent("Windowclip", isDirectory: true)
         return base.appendingPathComponent("control.sock")
     }
 

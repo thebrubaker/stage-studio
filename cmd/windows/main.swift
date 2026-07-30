@@ -1,4 +1,4 @@
-// stage-studio window enumerator — lists on-screen windows or finds one by pattern.
+// windowclip window enumerator — lists on-screen windows or finds one by pattern.
 //
 // CGWindowList runs without Accessibility permission, but window TITLES require
 // Screen Recording permission. Without it, you'll see app names and bounds but
