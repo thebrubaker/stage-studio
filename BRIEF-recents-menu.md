@@ -1,5 +1,7 @@
 # Build brief — recents in the status-item menu
 
+> **Historical — predates the 2026-07-30 rename to Windowclip.** Left verbatim on purpose: the product names, bundle id `io.digitalpine.stage-studio`, executable `StageStudio`, `~/Library/Application Support/Stage Studio/`, exp-clone paths and base commits below were all true when this brief was written, and the safety constraints in it were correct for the app installed at the time. For current identity see `README.md` and `app/Resources/Info.plist`.
+
 Branch: `feat/recents-menu` · Workdir: `~/Code/.exp-stage-studio/003-recents-menu` ONLY · Base: main @ 055bba3 (app-as-engine, socket control surface). Ticket ID arriving as a DIG number — reference it in commits once the lead passes it along; until then reference "recents-menu".
 
 ## Intent

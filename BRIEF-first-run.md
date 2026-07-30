@@ -1,5 +1,7 @@
 # Build brief — first-run setup for permissions (DIG-803)
 
+> **Historical — predates the 2026-07-30 rename to Windowclip.** Left verbatim on purpose: the product names, bundle id `io.digitalpine.stage-studio`, executable `StageStudio`, `~/Library/Application Support/Stage Studio/`, exp-clone paths and base commits below were all true when this brief was written, and the safety constraints in it were correct for the app installed at the time. For current identity see `README.md` and `app/Resources/Info.plist`.
+
 Ticket: **DIG-803** — "No first-run setup flow for the permissions the app needs"
 Branch: `feat/dig-803-first-run` · Workdir: `/Users/joel/Code/.exp-stage-studio/005-first-run-setup` **ONLY**
 Base: `feat/dig-790-packaging` @ `3da7302` (carries the macOS-15 deployment floor + the DMG packaging script)

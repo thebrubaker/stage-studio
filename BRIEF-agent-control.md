@@ -1,5 +1,7 @@
 # Build brief — one cohesive tool: Claude records through the app (DIG-793)
 
+> **Historical — predates the 2026-07-30 rename to Windowclip.** Left verbatim on purpose: the product names, bundle id `io.digitalpine.stage-studio`, executable `StageStudio`, `~/Library/Application Support/Stage Studio/`, exp-clone paths and base commits below were all true when this brief was written, and the safety constraints in it were correct for the app installed at the time. For current identity see `README.md` and `app/Resources/Info.plist`.
+
 Ticket: DIG-793 · Branch: `feat/agent-control` · Workdir: `~/Code/.exp-stage-studio/002-agent-control` ONLY. Base: main @ 9b9223d (includes the signed Stage Studio app).
 
 ## Intent

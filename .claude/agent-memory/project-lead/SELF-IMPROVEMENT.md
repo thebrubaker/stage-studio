@@ -1,4 +1,4 @@
-# Self-improvement log — project-lead @ stage-studio
+# Self-improvement log — project-lead @ windowclip
 
 Last meta-review: 2026-07-28
 

@@ -1,5 +1,7 @@
 # Build brief — stage-studio hotkey recorder (DIG-789)
 
+> **Historical — predates the 2026-07-30 rename to Windowclip.** Left verbatim on purpose: the product names, bundle id `io.digitalpine.stage-studio`, executable `StageStudio`, `~/Library/Application Support/Stage Studio/`, exp-clone paths and base commits below were all true when this brief was written, and the safety constraints in it were correct for the app installed at the time. For current identity see `README.md` and `app/Resources/Info.plist`.
+
 Ticket: DIG-789 · Branch: `feat/hotkey-app` · Workdir: this exp clone ONLY (`~/Code/.exp-stage-studio/001-hotkey-app`). Never touch `~/Code/stage-studio`.
 
 ## Intent
