@@ -8,6 +8,7 @@
 // In debug mode the app prints the CGWindowID of each surface it puts on screen,
 // so `screencapture -l <id>` targets the REAL rendered window.
 
+import AVFoundation
 import AppKit
 
 struct LaunchOptions {
@@ -57,6 +58,29 @@ struct LaunchOptions {
     /// which stage 2 verifies against the live granted path instead.
     var debugScreenStatus: PermissionStatus?
     var debugMicStatus: PermissionStatus?
+    /// Park a plain light (or dark) window behind the debug surface, owned by THIS
+    /// app, so a translucent panel can be judged over a background other than the
+    /// user's wallpaper — without changing that wallpaper.
+    ///
+    /// It lives in-process because borrowing another app's window doesn't work:
+    /// parking a white Preview window behind the setup panel was tried twice and
+    /// the frontmost app reclaimed the z-order between the launch and the shot both
+    /// times, so the "white background" shot came back showing a dark terminal.
+    /// Same-app windows order deterministically; other apps' don't.
+    var debugBackdrop: String?
+    /// Print what macOS actually reports about our grants, then quit. Reads only —
+    /// no request, no prompt, nothing written. This is the safe way to confirm the
+    /// live state of a machine before running anything that *could* raise a prompt.
+    var debugPermissions = false
+    /// Drive the setup window from the REAL permission state instead of injected
+    /// flags, and keep it in sync while it's up. How the granted path gets verified
+    /// against live TCC rather than against a fixture.
+    var debugLive = false
+    /// Fire a row's real action — the same closure a click runs — then quit. A
+    /// button is only as good as what happens when it's pressed, and pressing one
+    /// for real needs an Accessibility grant this app deliberately doesn't have.
+    /// Same trick as `--debug-reveal-recent`.
+    var debugSetupAction: PermissionKind?
 }
 
 @MainActor
@@ -68,6 +92,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var control: ControlServer?
     private var setup: SetupController?
+    /// Debug-only: see `showDebugBackdrop`.
+    private var backdrop: NSWindow?
+    /// Re-reads TCC while the setup window is up: see `startStatusPolling`.
+    private var statusPoll: Timer?
     /// The setup window can be dismissed twice on the way out (Done, then
     /// `windowWillClose` as the app tears down). Debug runs quit on dismissal, so
     /// the second one must not re-enter `terminate`.
@@ -78,7 +106,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if options.debugReveal {
+        // First thing, before any surface exists: whether Screen Recording was
+        // granted *at launch* is the only way to tell a usable grant from one that
+        // needs a relaunch, and it stops being knowable the moment the user grants.
+        Permissions.snapshotLaunchState()
+
+        if options.debugPermissions {
+            runDebugPermissions()
+        } else if options.debugReveal {
             revealInFinder(Self.newestRecording())
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { NSApp.terminate(nil) }
         } else if let index = options.debugRevealRecent {
@@ -493,22 +528,121 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { NSApp.terminate(nil) }
     }
 
-    /// The setup window with its rows forced into whatever state is being judged.
-    /// No permission API is touched on this path — the states come from the flags,
-    /// so a screenshot of "denied" costs nothing and revokes nothing.
+    // MARK: - Permissions
+
+    /// Read the real state into the window and re-lay it out. Called after every
+    /// action and on a poll, because a grant can arrive from System Settings — a
+    /// different app entirely — and nothing notifies us when it does.
+    private func refreshSetupStatuses() {
+        guard let setup else { return }
+        let screen = Permissions.screenRecording
+        let mic = Permissions.microphone
+        guard screen != setup.model.screenRecording || mic != setup.model.microphone else { return }
+        note("status change: screen \(setup.model.screenRecording.rawValue)→\(screen.rawValue), "
+            + "mic \(setup.model.microphone.rawValue)→\(mic.rawValue)")
+        setup.model.screenRecording = screen
+        setup.model.microphone = mic
+        setup.refresh()
+    }
+
+    /// The user visits System Settings and comes back; the window has to be right
+    /// when they do. There is no TCC change notification, so this polls — but only
+    /// while the window is actually on screen, so an invisible agent app isn't
+    /// waking up to ask macOS questions nobody is reading the answer to.
+    private func startStatusPolling() {
+        guard statusPoll == nil else { return }
+        let timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshSetupStatuses() }
+        }
+        // Common-mode: without it the timer stalls for the whole time a menu or a
+        // window drag is running its own tracking loop.
+        RunLoop.main.add(timer, forMode: .common)
+        statusPoll = timer
+    }
+
+    private func stopStatusPolling() {
+        statusPoll?.invalidate()
+        statusPoll = nil
+    }
+
+    /// One state, one action. The window knows nothing about any of this; it just
+    /// reports which row was pressed and what state that row was in.
+    private func performSetupAction(_ kind: PermissionKind, _ status: PermissionStatus) {
+        switch (kind, status) {
+        case (_, .granted):
+            // Not actionable — there is no button on a granted row.
+            break
+        case (.screenRecording, .needed):
+            Permissions.requestScreenRecording { [weak self] in self?.refreshSetupStatuses() }
+        case (.microphone, .needed):
+            Permissions.requestMicrophone { [weak self] in self?.refreshSetupStatuses() }
+        case (_, .denied):
+            // macOS will not prompt this app again, so the only thing left that
+            // helps is putting the right switch in front of them.
+            Permissions.openSettings(for: kind)
+        case (.screenRecording, .needsRelaunch):
+            Permissions.relaunch()
+        case (.microphone, .needsRelaunch):
+            // Unreachable: a microphone grant applies to the running process, so
+            // this row can never ask for a relaunch. Named rather than defaulted so
+            // it stays unreachable on purpose instead of by omission.
+            note("microphone has no relaunch state — ignoring")
+        }
+    }
+
+    /// Press a row's control the way AppKit would, through the window's own
+    /// `onAction`. A granted row has no control, so firing at one is reported and
+    /// left alone — exactly as clicking empty space does nothing.
+    private func fireSetupAction(_ kind: PermissionKind, on setup: SetupController) {
+        let status = setup.model.status(of: kind)
+        guard status != .granted else {
+            note("\(kind.rawValue) is granted — that row has no button to press, by design")
+            return
+        }
+        note("firing \(kind.rawValue) action in state \(status.rawValue)")
+        setup.onAction(kind, status)
+    }
+
+    /// Read the live state and quit. Deliberately request-free: it proves what TCC
+    /// says about this machine without any chance of raising a prompt, which is the
+    /// only responsible first step on a machine whose real grants matter.
+    private func runDebugPermissions() {
+        note("screen recording: \(Permissions.screenRecording.rawValue) "
+            + "(preflight=\(CGPreflightScreenCaptureAccess()))")
+        note("microphone: \(Permissions.microphone.rawValue) "
+            + "(AVCaptureDevice=\(AVCaptureDevice.authorizationStatus(for: .audio).rawValue))")
+        for kind in PermissionKind.allCases {
+            note("\(kind.rawValue) settings URL: \(Permissions.settingsURL(for: kind).absoluteString)")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { NSApp.terminate(nil) }
+    }
+
+    /// The setup window, with real actions wired.
+    ///
+    /// Row states come from the flags by default — so a screenshot of `denied`
+    /// costs nothing and revokes nothing — or from live TCC under `--debug-live`.
+    /// Either way the BUTTONS are real: pressing one requests, deep-links or
+    /// relaunches for real, and the window then re-reads the live state, which will
+    /// replace any injected value. That is the point; a stub button proves nothing.
     private func runDebugSetup() {
         let setup = SetupController()
         self.setup = setup
-        setup.model.screenRecording = options.debugScreenStatus ?? .needed
-        setup.model.microphone = options.debugMicStatus ?? .needed
-        // A button that reports instead of acting: stage 1 proves the row states
-        // are reachable and legible; what the buttons DO is stage 2.
-        setup.onAction = { kind, status in
+        if options.debugLive {
+            setup.model.screenRecording = Permissions.screenRecording
+            setup.model.microphone = Permissions.microphone
+            startStatusPolling()
+        } else {
+            setup.model.screenRecording = options.debugScreenStatus ?? .needed
+            setup.model.microphone = options.debugMicStatus ?? .needed
+        }
+        setup.onAction = { [weak self] kind, status in
             note("action tapped: \(kind.rawValue) (\(status.rawValue))")
+            self?.performSetupAction(kind, status)
         }
         setup.onClose = { [weak self] in
             guard let self, !self.setupDismissed else { return }
             self.setupDismissed = true
+            self.stopStatusPolling()
             note("setup dismissed")
             DispatchQueue.main.async { NSApp.terminate(nil) }
         }
@@ -517,11 +651,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             note("screen: \(setup.model.screenRecording.rawValue), mic: \(setup.model.microphone.rawValue)")
             note("window id: \(setup.windowID.map(String.init) ?? "<unavailable>")")
             note("showing setup — Esc or the close button to dismiss")
+            if let kind = options.debugSetupAction {
+                fireSetupAction(kind, on: setup)
+            }
             armCapture { setup.captureRegion }
         }
     }
 
+    /// A screen-filling flat window under the surface being judged. Deliberately
+    /// dumb: opaque fill, no content, ignores the mouse, torn down with the run.
+    /// It measures nothing — it only changes what the panel's material has to
+    /// survive being seen against.
+    private func showDebugBackdrop(_ name: String) {
+        let fill: NSColor
+        switch name.lowercased() {
+        case "white": fill = .white
+        // A typical light-mode document window, which is what Art's screen will
+        // actually have behind this panel more often than pure white.
+        case "light": fill = NSColor(calibratedWhite: 0.95, alpha: 1)
+        case "dark": fill = NSColor(calibratedWhite: 0.10, alpha: 1)
+        default:
+            FileHandle.standardError.write(Data(
+                "stage-studio: unknown --debug-backdrop \(name). Try: white, light, dark\n".utf8
+            ))
+            exit(64)
+        }
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
+        let window = NSWindow(
+            contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        window.backgroundColor = fill
+        window.isOpaque = true
+        // Left at .normal on purpose. Activating the app raises ALL of its normal
+        // windows above other apps', so the backdrop covers the desktop while the
+        // key window (the surface under test) still orders above the backdrop. A
+        // below-normal level would put every other app's window back on top of it.
+        window.level = .normal
+        window.ignoresMouseEvents = true
+        window.animationBehavior = .none
+        window.orderFront(nil)
+        backdrop = window
+    }
+
     private func runDebugSurface(_ surface: String) {
+        if let name = options.debugBackdrop { showDebugBackdrop(name) }
+
         if surface == "menu" {
             runDebugMenu()
             return

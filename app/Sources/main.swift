@@ -25,6 +25,16 @@ func usage() -> Never {
                                  needed | granted | denied | relaunch
       --debug-mic <state>        setup: force the Microphone row
                                  needed | granted | denied
+      --debug-live               setup: drive the rows from REAL permission state
+                                 instead of the flags above, and keep them in sync
+      --debug-setup-action <row> setup: press that row's real button, then quit
+                                 screen | mic
+      --debug-permissions        print what macOS reports about our grants and quit
+                                 (reads only — cannot raise a prompt)
+      --debug-backdrop <fill>    park a flat window behind the surface, so a
+                                 translucent panel can be judged against
+                                 something other than the wallpaper
+                                 white | light | dark
       --debug-capture <png>      screenshot the surface, then quit (self-cleaning)
       --debug-capture-delay <s>  settle time before the shot (default 1.8)
       --debug-timeout <s>        hard teardown for interactive runs (default 25)
@@ -80,6 +90,28 @@ while i < argv.count {
             }
             options.debugMicStatus = status
         }
+    case "--debug-permissions":
+        options.debugPermissions = true
+    case "--debug-live":
+        options.debugLive = true
+    case "--debug-setup-action":
+        i += 1
+        switch argv[safe: i]?.lowercased() {
+        case "screen", "screenrecording", "screen-recording":
+            options.debugSetupAction = .screenRecording
+        case "mic", "microphone":
+            options.debugSetupAction = .microphone
+        default:
+            FileHandle.standardError.write(Data("--debug-setup-action needs screen or mic\n".utf8))
+            exit(64)
+        }
+    case "--debug-backdrop":
+        i += 1
+        guard i < argv.count else {
+            FileHandle.standardError.write(Data("--debug-backdrop needs white, light or dark\n".utf8))
+            exit(64)
+        }
+        options.debugBackdrop = argv[i]
     case "--debug-midline":
         options.debugMidline = true
     case "--debug-freeze":

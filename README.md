@@ -214,6 +214,20 @@ APP="app/build/Stage Studio.app/Contents/MacOS/StageStudio"
 "$APP" --debug-show setup --debug-screen denied   --debug-mic denied
 "$APP" --debug-show setup --debug-screen granted  --debug-mic granted  # the ready state
 
+# the same window driven by REAL permission state, kept in sync while it's up
+"$APP" --debug-show setup --debug-live
+
+# what macOS actually reports — reads only, cannot raise a prompt
+"$APP" --debug-permissions
+
+# press a row's real button, then quit (request / deep link / relaunch, for real)
+"$APP" --debug-show setup --debug-screen needed   --debug-setup-action screen
+"$APP" --debug-show setup --debug-mic    denied   --debug-setup-action mic
+"$APP" --debug-show setup --debug-screen relaunch --debug-setup-action screen
+
+# judge a translucent panel over something other than the wallpaper
+"$APP" --debug-show setup --debug-backdrop white --debug-capture /tmp/on-white.png
+
 # the status menu — opened for real, with the real history in it
 "$APP" --debug-show menu --debug-capture /tmp/menu.png
 "$APP" --debug-reveal-recent 0    # click its Nth recent item (disabled = no-op)
@@ -234,6 +248,42 @@ io.digitalpine.stage-studio` — revokes the grant the installed app runs on, an
 re-granting is a manual chore for a screenshot. The ungranted states are rendered,
 never provoked. (`--debug-mic relaunch` is rejected: a mic grant applies to the
 running process immediately, so that state cannot exist.)
+
+The buttons, though, are **real** on every one of those paths — an injected state
+decides what the window says, not what pressing it does. `--debug-setup-action`
+presses one through the window's own handler, because clicking it for real would
+need an Accessibility grant this app deliberately doesn't have (same reasoning as
+`--debug-reveal-recent`). Requesting a permission that is already granted is a
+no-op, which is what makes the request paths safe to exercise on a machine whose
+grants matter: `CGRequestScreenCaptureAccess()` and `AVCaptureDevice.requestAccess`
+both return `true` immediately and raise no prompt.
+
+**Verified deep links** (macOS 26, checked by opening them and reading the window
+title, not from memory):
+
+| row | URL | lands on |
+|---|---|---|
+| Screen Recording | `x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture` | "Screen & System Audio Recording" |
+| Microphone | `x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone` | "Microphone" |
+
+**Two ways to tell `granted` from `needsRelaunch`, and only one of them works.**
+A Screen Recording grant does not apply to a process that was already running when
+it arrived, so `granted` means *granted at launch* — `Permissions.snapshotLaunchState()`
+reads it once, before any window exists. Read lazily, the answer would flip the
+moment the user granted the permission and the relaunch state would never appear,
+leaving the window saying "Allowed" over an app that still cannot capture anything.
+
+**Denial is inferred, not reported.** `CGPreflightScreenCaptureAccess()` returns one
+Bool; there is no API distinguishing "never asked" from "denied". So a failed request
+persists `screenRecordingRequested` in `UserDefaults`, and *no grant + already asked*
+is what `denied` means. The flag is only written when a request did **not** yield
+access, so a machine that already has the grant never accumulates it.
+
+`--debug-backdrop` parks a flat opaque window behind the surface, in-process. It
+exists because borrowing another app's window doesn't work: a white Preview window
+parked behind the setup panel lost the z-order to the frontmost app between launch
+and shot, twice, and the "over white" screenshot came back showing a dark terminal.
+Same-app windows order deterministically.
 
 `app/tools/inkbox` measures where text ink actually sits relative to a row's
 midline in a screenshot, so "optically centered" stays a number rather than an
