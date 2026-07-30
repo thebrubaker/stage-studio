@@ -494,10 +494,15 @@ async function recordViaApp(args: Args) {
 
   await new Promise((r) => setTimeout(r, args.duration * 1000));
   const stopped = await control({ command: "stop" });
-  reportStop(stopped);
+  reportStop(stopped, args.duration);
 }
 
-function reportStop(res: ControlResponse) {
+/** `requested` is the duration the caller asked for, when there was one. The
+ *  duration in `res` is measured from the finished file, so comparing the two
+ *  is a real check rather than the app agreeing with itself — DIG-807 shipped a
+ *  1.8s recording that announced itself as 5.2s precisely because nothing ever
+ *  compared the artifact to the ask. */
+function reportStop(res: ControlResponse, requested?: number) {
   if (res.cancelled) {
     // The user's physical controls outrank the caller's request, and the caller
     // is told plainly rather than being handed a missing file to puzzle over.
@@ -510,6 +515,16 @@ function reportStop(res: ControlResponse) {
   }
   const seconds = res.duration ? ` (${res.duration.toFixed(1)}s)` : "";
   console.log(`[stage-studio] saved ${res.output}${seconds}`);
+  // Half a second of slack: a take ends on a frame boundary, not exactly on the
+  // deadline. Anything beyond that is the recording being materially shorter
+  // than asked for, and the user should hear it from us rather than discover it
+  // in the file.
+  if (requested && requested > 0 && res.duration && res.duration < requested - 0.5) {
+    console.error(
+      `[stage-studio] warning: asked for ${requested}s but the file is ` +
+        `${res.duration.toFixed(1)}s — the recording is short.`,
+    );
+  }
 }
 
 async function runControlCommand(command: "stop" | "cancel" | "status") {

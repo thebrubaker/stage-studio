@@ -421,10 +421,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             switch phase {
             case .recording:
                 let after = self.options.debugRecordSeconds
-                DispatchQueue.main.asyncAfter(deadline: .now() + after) {
-                    note("stopping after \(after)s")
-                    session.requestStop()
+                // NOT asyncAfter: GCD coalesces timers with a leeway
+                // proportional to the deadline, which fired this ~5% late
+                // (+0.5s on a 10s take) and showed up as the recorder
+                // overshooting when the recorder was in fact accurate to 13ms.
+                // The harness is the measuring instrument for duration bugs, so
+                // it has to keep better time than the thing it measures.
+                let stopTimer = Timer(timeInterval: after, repeats: false) { _ in
+                    MainActor.assumeIsolated {
+                        note("stopping after \(after)s")
+                        session.requestStop()
+                    }
                 }
+                stopTimer.tolerance = 0
+                RunLoop.main.add(stopTimer, forMode: .common)
             case .saved:
                 note("output: \(session.outputURL?.path ?? "<none>")")
                 self.captureAfterRedraw(options.debugCapture, region: { pill.captureRegion }) {

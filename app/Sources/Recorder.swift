@@ -9,6 +9,7 @@
 //   duration 0 = open-ended, stop with SIGTERM (5-minute safety cap is built in)
 
 import AppKit
+import AVFoundation
 import Foundation
 
 @MainActor
@@ -30,8 +31,17 @@ final class Recorder {
 
     /// Called on the main actor when the recorder exits, with its status code.
     var onExit: (Int32) -> Void = { _ in }
+    /// Called on the main actor once capture is proven live and frames are
+    /// arriving — the moment it becomes honest to start the user's clock.
+    var onArmed: () -> Void = {}
+
+    /// True once the recorder has reported a real frame. Until then a `go()`
+    /// would start a clock the capture cannot yet honour.
+    private(set) var isArmed = false
 
     var isRunning: Bool { process?.isRunning ?? false }
+    /// Time since the take began — NOT since the process was spawned. Start-up
+    /// happens before `go()` and must not count against the recording (DIG-807).
     var elapsed: TimeInterval { startedAt.map { -$0.timeIntervalSinceNow } ?? 0 }
 
     // MARK: - Repo layout
@@ -84,7 +94,14 @@ final class Recorder {
 
     // MARK: - Lifecycle
 
-    func start(windowID: CGWindowID, output: URL) throws {
+    /// Spawn the recorder and let it warm up, WITHOUT beginning the take.
+    ///
+    /// Start-up is not free and not constant: measured at ~0.6s warm and 3.2s
+    /// with a cold CoreAudio stack (the audio device alone blocked 2.25s on the
+    /// session behind DIG-807). Spawning here — during the countdown — means
+    /// that cost is paid inside a wait the user is already having, and `go()`
+    /// can begin capture on a pipeline that is already hot.
+    func prepare(windowID: CGWindowID, output: URL) throws {
         let binary = Self.binaryURL
         guard FileManager.default.isExecutableFile(atPath: binary.path) else {
             throw StartError.binaryMissing(binary.path)
@@ -97,10 +114,16 @@ final class Recorder {
 
         var env = ProcessInfo.processInfo.environment
         env["RECORDER_BG_IMAGE"] = Self.backgroundImageURL?.path ?? ""
+        // Hold the take until SIGUSR1, and report lifecycle on stdout.
+        env["RECORDER_HANDSHAKE"] = "1"
         task.environment = env
+
+        let lifecycle = Pipe()
+        task.standardOutput = lifecycle
 
         task.terminationHandler = { [weak self] proc in
             let status = proc.terminationStatus
+            lifecycle.fileHandleForReading.readabilityHandler = nil
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.process = nil
@@ -111,8 +134,72 @@ final class Recorder {
         try task.run()
         process = task
         outputURL = output
+        // Deliberately nil: the clock starts at `go()`, not here.
+        startedAt = nil
+        isArmed = false
+        readLifecycle(from: lifecycle)
+        note("recorder warming (pid \(task.processIdentifier)) → \(output.path)")
+    }
+
+    /// Begin the take. This is t=0 for the recording, for the pill, and for
+    /// whoever is counting down to the stop.
+    func go() {
+        guard let process, process.isRunning else { return }
         startedAt = Date()
-        note("recorder started (pid \(task.processIdentifier)) → \(output.path)")
+        kill(process.processIdentifier, SIGUSR1)
+        note("go → recorder \(process.processIdentifier)")
+    }
+
+    /// One line per lifecycle event on the recorder's stdout. Read rather than
+    /// polled, so the app learns "armed" the instant it is true.
+    private func readLifecycle(from pipe: Pipe) {
+        let handle = pipe.fileHandleForReading
+        var buffer = Data()
+        handle.readabilityHandler = { [weak self] fh in
+            let chunk = fh.availableData
+            if chunk.isEmpty {
+                fh.readabilityHandler = nil
+                return
+            }
+            buffer.append(chunk)
+            while let newline = buffer.firstIndex(of: 0x0A) {
+                let line = String(decoding: buffer[buffer.startIndex..<newline], as: UTF8.self)
+                buffer.removeSubrange(buffer.startIndex...newline)
+                guard line.hasPrefix("stage-studio:") else { continue }
+                let event = String(line.dropFirst("stage-studio:".count))
+                Task { @MainActor [weak self] in self?.handleLifecycle(event) }
+            }
+        }
+    }
+
+    private func handleLifecycle(_ event: String) {
+        switch event {
+        case "armed":
+            guard !isArmed else { return }
+            isArmed = true
+            note("recorder armed — capture live, holding for go")
+            onArmed()
+        case "capturing":
+            note("recorder capturing")
+        default:
+            break
+        }
+    }
+
+    /// The recording's length as the FILE reports it.
+    ///
+    /// The app used to report its own process lifetime, which is exactly why a
+    /// session that captured 1.8 seconds of a requested 5 still printed
+    /// "(5.2s)": the number was structurally incapable of contradicting the
+    /// bug. Measuring the artifact is what makes a regression here visible.
+    static func measuredDuration(of url: URL) async -> TimeInterval? {
+        let asset = AVURLAsset(url: url)
+        do {
+            let seconds = CMTimeGetSeconds(try await asset.load(.duration))
+            return (seconds.isFinite && seconds > 0) ? seconds : nil
+        } catch {
+            return nil
+        }
     }
 
     /// Clean finalize — the same SIGTERM path the Claude flow uses.
@@ -126,6 +213,8 @@ final class Recorder {
     /// real recordings.
     func cancel() {
         onExit = { _ in }
+        onArmed = {}
+        isArmed = false
         if let process, process.isRunning {
             process.terminate()
             process.waitUntilExit()

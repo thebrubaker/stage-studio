@@ -83,6 +83,13 @@ final class SessionController {
     private var countdownRemaining = 0
     private var timer: Timer?
     private var savedDismissWork: DispatchWorkItem?
+    /// Where the warming recorder was told to write. Chosen at countdown time,
+    /// because the recorder now spawns then.
+    private var preparedOutput: URL?
+    /// The countdown finished before the recorder could arm; the take starts the
+    /// moment it does.
+    private var waitingForArm = false
+    private var armTimeoutWork: DispatchWorkItem?
 
     /// Who started the live session, and where they asked for the file.
     private(set) var source: SessionSource = .human
@@ -96,6 +103,9 @@ final class SessionController {
 
     /// Mockup's 3·2·1.
     private let countdownSeconds = 3
+    /// How long to hold after the countdown for capture to come up, before
+    /// calling the session failed rather than leaving a pill up forever.
+    private let armTimeout: TimeInterval = 15
     /// How long the "Saved ✓" flash stays before fading.
     private let savedLinger: TimeInterval = 4
 
@@ -260,6 +270,31 @@ final class SessionController {
         pill.source = source
         pill.show(.countdown(remaining: countdownRemaining, appName: window.app))
         startTimer(interval: 1) { [weak self] in self?.tickCountdown() }
+
+        // The countdown is dead time we were paying twice: the user waited it
+        // out, and then the recording separately lost however long start-up
+        // took. Warming here spends it once.
+        prepareRecorder(for: window)
+    }
+
+    /// Spawn the recorder now and let it warm. It captures but discards frames
+    /// until `go()`, so nothing of the countdown lands in the file.
+    private func prepareRecorder(for window: CapturableWindow) {
+        let output = requestedOutput ?? Recorder.defaultOutputURL()
+        preparedOutput = output
+        recorder.onArmed = { [weak self] in self?.recorderArmed() }
+        recorder.onExit = { [weak self] status in self?.recorderExited(status: status) }
+        do {
+            try FileManager.default.createDirectory(
+                at: output.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try recorder.prepare(windowID: window.id, output: output)
+        } catch {
+            note("failed to start recorder: \(error.localizedDescription)")
+            NSSound.beep()
+            resolveStart(SessionResult(ok: false, state: "idle", error: "recorder_failed"))
+            endSession()
+        }
     }
 
     private func tickCountdown() {
@@ -274,36 +309,65 @@ final class SessionController {
 
     private func cancelCountdown() {
         stopTimer()
-        // Nothing was ever spawned — a cancelled countdown writes no file at all.
+        // A recorder IS warming by now, but the gate never opened, so nothing
+        // was ever written to the take. endSession's recorder.cancel() kills it
+        // and removes the empty file — a cancelled countdown still leaves
+        // nothing behind.
         endSession()
     }
 
     // MARK: - Recording
 
     private func beginRecording() {
-        guard let target else { return endSession() }
-        let output = requestedOutput ?? Recorder.defaultOutputURL()
-
-        recorder.onExit = { [weak self] status in self?.recorderExited(status: status) }
-        do {
-            try FileManager.default.createDirectory(
-                at: output.deletingLastPathComponent(), withIntermediateDirectories: true
-            )
-            try recorder.start(windowID: target.id, output: output)
-        } catch {
-            note("failed to start recorder: \(error.localizedDescription)")
+        guard preparedOutput != nil else { return endSession() }
+        guard recorder.isRunning else {
+            note("recorder died during the countdown")
             NSSound.beep()
-            resolveStart(SessionResult(
-                ok: false, state: "idle", error: "recorder_failed",
-            ))
+            resolveStart(SessionResult(ok: false, state: "idle", error: "recorder_failed"))
             return endSession()
         }
 
+        guard recorder.isArmed else {
+            // Warm-up outran the countdown — a cold audio stack has been seen to
+            // take 2.25s on its own. Waiting is the honest move: starting a
+            // clock the capture can't yet honour is the whole defect.
+            waitingForArm = true
+            note("countdown done — waiting for capture to arm")
+            let work = DispatchWorkItem { [weak self] in self?.armTimedOut() }
+            armTimeoutWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + armTimeout, execute: work)
+            return
+        }
+        startTake()
+    }
+
+    /// Capture went live after the countdown had already finished.
+    private func recorderArmed() {
+        guard waitingForArm else { return }
+        startTake()
+    }
+
+    private func armTimedOut() {
+        guard waitingForArm else { return }
+        note("capture never armed within \(Int(armTimeout))s — giving up")
+        NSSound.beep()
+        resolveStart(SessionResult(ok: false, state: "idle", error: "recorder_failed"))
+        endSession()
+    }
+
+    /// t=0 for the recording. Everything before this is warm-up.
+    private func startTake() {
+        waitingForArm = false
+        armTimeoutWork?.cancel()
+        armTimeoutWork = nil
+        guard let output = preparedOutput else { return endSession() }
+
+        recorder.go()
         phase = .recording
         pill.update(.recording(elapsed: 0))
         startTimer(interval: 0.5) { [weak self] in self?.tickElapsed() }
-        // The caller has been holding since `start` — the countdown survived, so
-        // capture is genuinely underway.
+        // The caller has been holding since `start` — the countdown survived and
+        // capture is live, so the clock it starts now is one we can honour.
         resolveStart(SessionResult(ok: true, state: "recording", output: output))
     }
 
@@ -321,9 +385,16 @@ final class SessionController {
     }
 
     private func recorderExited(status: Int32) {
+        // Dying while it was still warming is a failed session, not a save —
+        // there is no take to report.
+        guard phase == .recording else {
+            note("recorder exited \(status) before the take began")
+            NSSound.beep()
+            return endSession()
+        }
         stopTimer()
         let output = recorder.outputURL
-        let duration = recorder.elapsed
+        let elapsed = recorder.elapsed
 
         guard status == 0, let output, FileManager.default.fileExists(atPath: output.path) else {
             note("recorder exited \(status) without a usable file")
@@ -336,10 +407,21 @@ final class SessionController {
         // CLI, agent — arrives here with a file that exists on disk, and a session
         // that never got here never made one.
         RecentRecordings.shared.record(output)
-        pill.update(.saved(url: output, duration: duration))
         HotkeyManager.shared.unregister(.escape)
-        scheduleSavedDismiss()
-        resolveStop(SessionResult(ok: true, state: "saved", output: output, duration: duration))
+
+        // Ask the artifact how long it is. Reporting our own elapsed time is
+        // what let a 1.8s recording announce itself as 5.2s.
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let measured = await Recorder.measuredDuration(of: output)
+            if measured == nil {
+                note("could not read a duration from \(output.lastPathComponent) — reporting elapsed")
+            }
+            let duration = measured ?? elapsed
+            self.pill.update(.saved(url: output, duration: duration))
+            self.scheduleSavedDismiss()
+            self.resolveStop(SessionResult(ok: true, state: "saved", output: output, duration: duration))
+        }
     }
 
     private func scheduleSavedDismiss() {
@@ -381,10 +463,14 @@ final class SessionController {
     /// — and no control-surface caller is left hanging on a session that ended.
     private func endSession() {
         stopTimer()
+        waitingForArm = false
+        armTimeoutWork?.cancel()
+        armTimeoutWork = nil
         recorder.cancel()
         HotkeyManager.shared.unregister(.escape)
         pill.hide()
         target = nil
+        preparedOutput = nil
         requestedOutput = nil
         source = .human
         phase = .idle

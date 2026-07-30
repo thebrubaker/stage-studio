@@ -18,6 +18,18 @@
 //   RECORDER_NO_AUDIO=1      — skip mic capture
 //   RECORDER_SOLID_RED=1     — probe mode: solid red bg, no shadow/padding,
 //                              used to verify alpha-through-compose end-to-end
+//   RECORDER_HANDSHAKE=1     — controller mode (DIG-807). Capture starts as
+//                              usual, but frames are DISCARDED until SIGUSR1
+//                              arrives, and lifecycle lines are written to
+//                              stdout so the controller can tell warm-up from
+//                              recording:
+//                                stage-studio:armed      capture is live and
+//                                                        real frames are arriving
+//                                stage-studio:capturing  the take has begun
+//                              This exists so a caller can pay the (variable,
+//                              occasionally multi-second) start-up cost BEFORE
+//                              the user's clock starts, instead of subtracting
+//                              it from the recording.
 //
 // Requires Screen Recording AND Microphone permission on the parent terminal app.
 
@@ -44,6 +56,9 @@ let outputPath = args[3]
 let windowID = CGWindowID(windowIDNum)
 let captureAudio = ProcessInfo.processInfo.environment["RECORDER_NO_AUDIO"] != "1"
 let probeSolidRed = ProcessInfo.processInfo.environment["RECORDER_SOLID_RED"] == "1"
+/// Controller mode: hold the take until SIGUSR1, and report lifecycle on stdout.
+/// Off by default so the direct/headless contract (and its stdout) is unchanged.
+let handshake = ProcessInfo.processInfo.environment["RECORDER_HANDSHAKE"] == "1"
 // Optional file path to use as the canvas background image. JPEG/PNG/HEIC all
 // supported. Center-cropped + scaled to output dims. If unset (or file missing),
 // falls back to the procedural mesh gradient.
@@ -58,6 +73,68 @@ let OUTPUT_H = 1080
 /// away. 5 minutes is generous for a single demo clip; bump if it turns out to
 /// matter.
 let OPEN_ENDED_MAX_DURATION_S: Double = 300
+
+/// If capture never produces a first written frame, stop rather than hang.
+/// Generous, because in controller mode this span legitimately covers the
+/// caller's countdown as well as start-up.
+let STARTUP_WATCHDOG_S: Double = 60
+
+/// One line per lifecycle event, on stdout, for a controlling process to read.
+/// Unbuffered (FileHandle.write is a direct syscall), so the reader sees each
+/// line the moment it happens — the whole point is that the controller learns
+/// "ready" without polling.
+func emitLifecycle(_ event: String) {
+    guard handshake else { return }
+    FileHandle.standardOutput.write(Data("stage-studio:\(event)\n".utf8))
+}
+
+/// The take gate. Capture may be running (warming SCK, CoreAudio, the encoder)
+/// while this is still shut; frames that arrive before it opens are dropped
+/// before any compositing work, so warm-up is nearly free.
+final class CaptureGate {
+    private let lock = NSLock()
+    private var open: Bool
+    private var openedAt: CMTime?
+    init(open: Bool) { self.open = open }
+
+    var isOpen: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return open
+    }
+
+    /// True only for the call that actually opened it.
+    @discardableResult
+    func openNow() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if open { return false }
+        open = true
+        // SCK stamps every frame on the host clock, so reading the same clock
+        // here gives an exact boundary: frames already in flight when "go"
+        // arrived were captured during warm-up and are not part of the take.
+        // Without this the file starts ~0.19s early — the pipeline's delivery
+        // latency, silently prepended to the recording.
+        openedAt = CMClockGetTime(CMClockGetHostTimeClock())
+        return true
+    }
+
+    /// Both halves under one lock, so a frame can't be tested against a gate
+    /// state that changed between the two reads.
+    func snapshot() -> (open: Bool, openedAt: CMTime?) {
+        lock.lock(); defer { lock.unlock() }
+        return (open, openedAt)
+    }
+
+    /// Ends the take at this instant. Tearing a capture down is not free —
+    /// stopCapture took ~0.3-0.45s to actually halt delivery — and every frame
+    /// that arrives meanwhile would otherwise land in the file, overshooting
+    /// the requested duration by the teardown latency. Closing here makes the
+    /// artifact's length a property of the deadline rather than of how long
+    /// the shutdown happened to take.
+    func closeNow() {
+        lock.lock(); defer { lock.unlock() }
+        open = false
+    }
+}
 
 // MARK: - Composer
 
@@ -287,6 +364,25 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptureAudio
     var sessionStarted = false
     let writerLock = NSLock()
 
+    /// Shut during pre-roll in controller mode; permanently open otherwise.
+    var gate = CaptureGate(open: true)
+    /// Fired once, on the first genuinely complete frame — capture is proven live.
+    var onArmed: () -> Void = {}
+    /// Fired once, when the writer session opens on the first frame of the take.
+    var onSessionStarted: () -> Void = {}
+    /// How long the take should run, measured on the MEDIA timeline. A wall
+    /// clock can't express this: the first frame's presentation timestamp
+    /// trails its callback by ~0.19s of pipeline latency, so a wall-clock timer
+    /// started at that callback runs the file 0.19s long. Counting in frame
+    /// timestamps makes the artifact's length independent of delivery latency.
+    var takeLimitSeconds: Double?
+    /// Fired once, when the take has run its requested length.
+    var onTakeComplete: () -> Void = {}
+    /// Touched only from the single serial sample-handler queue.
+    private var armedReported = false
+    private var takeCompleteFired = false
+    private var sessionStartSeconds: Double = 0
+
     init(outputURL: URL, outputW: Int, outputH: Int, withAudio: Bool, composer: Composer) throws {
         try? FileManager.default.removeItem(at: outputURL)
         self.writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
@@ -329,6 +425,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptureAudio
             return false
         }
         writer.startSession(atSourceTime: pts)
+        sessionStartSeconds = CMTimeGetSeconds(pts)
         sessionStarted = true
         return true
     }
@@ -348,19 +445,43 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptureAudio
         }
 
         guard CMSampleBufferGetImageBuffer(sampleBuffer) != nil else { return }
+
+        // A real frame in hand is the only honest proof that the whole path —
+        // permission, SCK, the audio device, the encoder — is live. Report it
+        // even while the gate is shut, because that is precisely what lets a
+        // controller start the user's clock at a moment capture can honour.
+        if !armedReported {
+            armedReported = true
+            onArmed()
+        }
+
+        // Pre-roll: capture is warm but the take hasn't started. Drop ahead of
+        // compositing so holding the gate shut costs almost nothing.
+        let gateState = gate.snapshot()
+        guard gateState.open else { return }
+
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        // In flight when "go" landed — captured during warm-up, not the take.
+        if let openedAt = gateState.openedAt, CMTimeCompare(pts, openedAt) < 0 { return }
 
         // Compose: source (alpha-shaped window) on background → opaque output buffer.
         guard let composed = composer.compose(sampleBuffer) else { return }
 
         writerLock.lock()
-        _ = ensureSession(at: pts)
+        let didStartSession = ensureSession(at: pts)
         writerLock.unlock()
+        if didStartSession { onSessionStarted() }
 
         if videoInput.isReadyForMoreMediaData {
             if !videoInput.append(composed) {
                 FileHandle.standardError.write(Data("video append failed: \(writer.error?.localizedDescription ?? "?")\n".utf8))
             }
+        }
+
+        if let limit = takeLimitSeconds, !takeCompleteFired,
+           CMTimeGetSeconds(pts) - sessionStartSeconds >= limit {
+            takeCompleteFired = true
+            onTakeComplete()
         }
     }
 
@@ -378,6 +499,9 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptureAudio
         let started = sessionStarted
         writerLock.unlock()
         if !started { return }
+        // Same gate as video, so both tracks end on the same instant instead of
+        // audio trailing on through teardown.
+        guard gate.isOpen else { return }
 
         if audioInput.isReadyForMoreMediaData {
             if !audioInput.append(sampleBuffer) {
@@ -494,6 +618,9 @@ func run() async throws {
         stopLock.lock(); defer { stopLock.unlock() }
         if stopFired { return }
         stopFired = true
+        // Close the take FIRST, before the (slow) orderly teardown, so the file
+        // ends where the caller asked rather than wherever stopCapture landed.
+        recorder.gate.closeNow()
         FileHandle.standardError.write(Data("recorder: stop requested (\(reason))\n".utf8))
         stopSemaphore.signal()
     }
@@ -512,11 +639,56 @@ func run() async throws {
     sigintSource.setEventHandler { signalStop("SIGINT") }
     sigintSource.resume()
 
-    // Duration timer.
+    // SIGUSR1: "go" — open the gate and let the take begin. Only meaningful in
+    // controller mode; harmless otherwise, since the gate is already open.
+    signal(SIGUSR1, SIG_IGN)
+    let sigusr1Source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .global())
+    sigusr1Source.setEventHandler {
+        if recorder.gate.openNow() {
+            FileHandle.standardError.write(Data("recorder: go (SIGUSR1)\n".utf8))
+        }
+    }
+    sigusr1Source.resume()
+
+    // Duration is measured from the first frame actually written, NOT from
+    // process start (DIG-807). Start-up here costs 0.6s on a warm machine and
+    // was measured at 3.2s with a cold CoreAudio stack; charging that to the
+    // recording silently shortened it, worst of all on the short clips where
+    // the loss is proportionally largest.
     let effectiveDuration: Double = durationS == 0 ? OPEN_ENDED_MAX_DURATION_S : durationS
-    DispatchQueue.global().asyncAfter(deadline: .now() + effectiveDuration) {
-        let reason = durationS == 0 ? "open-ended safety cap (\(Int(OPEN_ENDED_MAX_DURATION_S))s)" : "duration elapsed"
-        signalStop(reason)
+    let durationLock = NSLock()
+    var durationArmed = false
+    let armDuration: () -> Void = {
+        durationLock.lock()
+        if durationArmed { durationLock.unlock(); return }
+        durationArmed = true
+        durationLock.unlock()
+        DispatchQueue.global().asyncAfter(deadline: .now() + effectiveDuration) {
+            let reason = durationS == 0 ? "open-ended safety cap (\(Int(OPEN_ENDED_MAX_DURATION_S))s)" : "duration elapsed"
+            signalStop(reason)
+        }
+    }
+
+    recorder.onArmed = { emitLifecycle("armed") }
+    recorder.onSessionStarted = {
+        emitLifecycle("capturing")
+        armDuration()
+    }
+    // A fixed duration is honoured on the media timeline; the wall-clock timer
+    // above stays on as the backstop for a stream that stops delivering.
+    recorder.takeLimitSeconds = durationS > 0 ? durationS : nil
+    recorder.onTakeComplete = { signalStop("duration elapsed") }
+    // Controller mode holds the take until "go"; every other caller records
+    // from the first frame, exactly as before.
+    recorder.gate = CaptureGate(open: !handshake)
+
+    // A take that never gets a first frame — no go signal, a vanished window —
+    // must not leave the process alive forever.
+    DispatchQueue.global().asyncAfter(deadline: .now() + STARTUP_WATCHDOG_S) {
+        durationLock.lock()
+        let started = durationArmed
+        durationLock.unlock()
+        if !started { signalStop("no frames within \(Int(STARTUP_WATCHDOG_S))s") }
     }
 
     FileHandle.standardError.write(Data("recorder: starting capture \(pxW)x\(pxH) → compose \(outW)x\(outH)\(probeSolidRed ? " [SOLID-RED PROBE]" : "")\(captureAudio ? " + mic" : " (no audio)") duration=\(durationS == 0 ? "open-ended" : "\(durationS)s")\n".utf8))
@@ -535,6 +707,7 @@ func run() async throws {
 
     sigtermSource.cancel()
     sigintSource.cancel()
+    sigusr1Source.cancel()
 
     FileHandle.standardError.write(Data("recorder: stopping stream...\n".utf8))
     try await stream.stopCapture()
