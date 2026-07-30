@@ -58,7 +58,11 @@ That's it. The binaries land in `cmd/clicks/clicks`, `cmd/windows/windows`, `cmd
 
 ## One-time permission setup
 
-Recording routes through `/Applications/Stage Studio.app`, so **the permissions live on the app**, granted once. Launch it, record something, and macOS asks for Screen Recording and Microphone the first time. Because the bundle id is frozen and the app is signed with a real Developer ID, those grants survive every rebuild — see [the hotkey app](#3-the-hotkey-app-no-claude-session-needed).
+Recording routes through `/Applications/Stage Studio.app`, so **the permissions live on the app**, granted once. Because the bundle id is frozen and the app is signed with a real Developer ID, those grants survive every rebuild — see [the hotkey app](#3-the-hotkey-app-no-claude-session-needed).
+
+**You should not need this section.** On first launch the app checks both grants and, if either is missing, puts up a setup window that says what's missing and offers the one action that state allows — request it, open the exact System Settings pane if macOS won't prompt again, or relaunch once a Screen Recording grant has arrived (a grant doesn't reach a process that was already running). If both grants are already in place the app stays invisible, as it does the rest of the time. It's also reachable any time from **Permissions…** in the status menu, for the case where a grant gets revoked later. The table below is what that window is automating, kept here as the reference.
+
+macOS will also raise its **own** capture-consent dialog when a recording starts, even with Screen Recording granted. That is macOS being careful, not a fault — the setup window forecasts it so it doesn't read as the app being broken.
 
 | Permission | Granted to | Why | Symptom if missing |
 |---|---|---|---|
@@ -217,6 +221,13 @@ APP="app/build/Stage Studio.app/Contents/MacOS/StageStudio"
 # the same window driven by REAL permission state, kept in sync while it's up
 "$APP" --debug-show setup --debug-live
 
+# the LAUNCH GATE decision itself — shows the window only if something's missing
+"$APP" --debug-show gate                        # all granted → shows NOTHING, exits
+"$APP" --debug-show gate --debug-screen denied   # → shows the window
+
+# the status menu's Permissions… entry, clicked for real
+"$APP" --debug-fire-menu "Permissions"
+
 # what macOS actually reports — reads only, cannot raise a prompt
 "$APP" --debug-permissions
 
@@ -278,6 +289,38 @@ Bool; there is no API distinguishing "never asked" from "denied". So a failed re
 persists `screenRecordingRequested` in `UserDefaults`, and *no grant + already asked*
 is what `denied` means. The flag is only written when a request did **not** yield
 access, so a machine that already has the grant never accumulates it.
+
+**When the window appears at all.** Two entry points, and only two:
+
+1. **At launch, only if something is missing.** `showSetupIfIncomplete()` is the whole
+   gate; a user with both grants sees nothing, which is the point of an `LSUIElement`
+   app. It runs *last* in startup, after the hotkey, status item and control socket,
+   so a user who dismisses it without fixing anything still has a working app — and so
+   the window can never be the reason the rest of the app didn't come up.
+2. **On demand, from the status menu's `Permissions…`.** A grant can be revoked months
+   later by someone who has forgotten this window exists; without a way back the app
+   would just quietly stop working, which is the failure this whole feature prevents,
+   reintroduced one level up.
+
+`Permissions…` gets its **own** menu section rather than sharing Quit's. macOS gives
+Quit a system-supplied glyph, and an icon on any item makes AppKit reserve an icon
+column for that entire section — so sharing the group pushed this item right to align
+with Quit's *text* while filling nothing, reading as accidentally indented. The menu
+dump (`--debug-show menu`) reports `indent`/`image`/`state`/`key` per item precisely
+because those are what decide an item's left inset.
+
+`--debug-screen` / `--debug-mic` inject into **`Permissions` itself**, not into the
+window's model — so a forced state drives the launch gate, the menu entry, the poll and
+the window alike. A fixture that only fools the view cannot exercise any of those.
+`--debug-show setup` keeps its documented default of `needed` for an unspecified row;
+every other surface injects only what was asked for, so an unflagged `--debug-show gate`
+reads the real machine and the invisible case is observable.
+
+A capture now reports the **bytes actually written** and fails loudly when nothing was.
+It used to print `captured <path>` unconditionally: `screencapture` into a missing
+directory fails silently, `try?` swallows the throw, and the harness reported evidence
+that did not exist. A verification tool inventing facts about its own work is worse than
+no tool.
 
 `--debug-backdrop` parks a flat opaque window behind the surface, in-process. It
 exists because borrowing another app's window doesn't work: a white Preview window

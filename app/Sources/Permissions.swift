@@ -50,6 +50,37 @@ enum Permissions {
         note("launch snapshot: screen recording granted=\(screenGrantedAtLaunch)")
     }
 
+    // MARK: - Debug injection
+
+    /// Debug-only overrides of what the reads report.
+    ///
+    /// They live HERE, at the source of truth, rather than being poured into the
+    /// window's model — because the launch gate, the status-menu entry and the poll
+    /// all ask this type, and a fixture that only fools the view can't exercise any
+    /// of them. Overriding here means a forced state drives the whole real path.
+    ///
+    /// Only the `--debug-screen` / `--debug-mic` flags ever write these; normal
+    /// operation leaves them nil and can't reach them. This is the reason no
+    /// `tccutil reset` is needed to see an ungranted state.
+    private static var injectedScreen: PermissionStatus?
+    private static var injectedMicrophone: PermissionStatus?
+
+    static func inject(screen: PermissionStatus?, microphone: PermissionStatus?) {
+        injectedScreen = screen
+        injectedMicrophone = microphone
+        note("injected: screen=\(screen?.rawValue ?? "live"), mic=\(microphone?.rawValue ?? "live")")
+    }
+
+    /// Drop back to reality. `--debug-live` calls this once the window is up, so a
+    /// forced starting state can be *corrected* by the poll — which is the only way
+    /// to prove the poll runs at all on a machine that already holds every grant.
+    static func clearInjections() {
+        guard injectedScreen != nil || injectedMicrophone != nil else { return }
+        injectedScreen = nil
+        injectedMicrophone = nil
+        note("injections cleared — reads are live from here")
+    }
+
     // MARK: - Status
 
     static func status(of kind: PermissionKind) -> PermissionStatus {
@@ -59,7 +90,14 @@ enum Permissions {
         }
     }
 
+    /// The launch gate's whole question. Reads only — it cannot raise a prompt, so
+    /// asking it on every launch costs a correctly-configured user nothing.
+    static var allGranted: Bool {
+        screenRecording == .granted && microphone == .granted
+    }
+
     static var screenRecording: PermissionStatus {
+        if let injectedScreen { return injectedScreen }
         if CGPreflightScreenCaptureAccess() {
             // The grant exists. Whether it applies to US depends on when it arrived.
             return screenGrantedAtLaunch ? .granted : .needsRelaunch
@@ -70,6 +108,7 @@ enum Permissions {
     }
 
     static var microphone: PermissionStatus {
+        if let injectedMicrophone { return injectedMicrophone }
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: return .granted
         case .notDetermined: return .needed

@@ -20,7 +20,10 @@ func usage() -> Never {
       StageStudio [--debug-show <surface>] [--debug-midline] [--debug-freeze]
 
     Debug flags (summon a surface deterministically, no hotkey / no recording):
-      --debug-show <surface>     menu | picker | setup | pill-countdown | pill-recording | pill-saved
+      --debug-show <surface>     menu | picker | setup | gate |
+                                 pill-countdown | pill-recording | pill-saved
+                                 gate = run the launch decision and show whatever
+                                 it decides to (nothing, if all grants are in)
       --debug-screen <state>     setup: force the Screen Recording row
                                  needed | granted | denied | relaunch
       --debug-mic <state>        setup: force the Microphone row
@@ -43,6 +46,8 @@ func usage() -> Never {
       --debug-hover              force the saved filename's hover affordance on
       --debug-reveal             reveal the newest recording in Finder, then quit
       --debug-reveal-recent <n>  fire the status menu's Nth recent item, then quit
+      --debug-fire-menu <text>   fire the status menu item whose title contains
+                                 <text> — real item, real target/action — then quit
       --debug-agent              dress the surface as an agent session (ring + attribution)
       --debug-label <name>       who the attribution credits (default Claude)
 
@@ -92,6 +97,13 @@ while i < argv.count {
         }
     case "--debug-permissions":
         options.debugPermissions = true
+    case "--debug-fire-menu":
+        i += 1
+        guard i < argv.count else {
+            FileHandle.standardError.write(Data("--debug-fire-menu needs part of an item title\n".utf8))
+            exit(64)
+        }
+        options.debugFireMenu = argv[i]
     case "--debug-live":
         options.debugLive = true
     case "--debug-setup-action":

@@ -81,6 +81,8 @@ struct LaunchOptions {
     /// for real needs an Accessibility grant this app deliberately doesn't have.
     /// Same trick as `--debug-reveal-recent`.
     var debugSetupAction: PermissionKind?
+    /// Fire the status-menu item whose title contains this text, then quit.
+    var debugFireMenu: String?
 }
 
 @MainActor
@@ -110,9 +112,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // granted *at launch* is the only way to tell a usable grant from one that
         // needs a relaunch, and it stops being knowable the moment the user grants.
         Permissions.snapshotLaunchState()
+        applyDebugInjections()
 
         if options.debugPermissions {
             runDebugPermissions()
+        } else if let needle = options.debugFireMenu {
+            runDebugFireMenu(needle)
         } else if options.debugReveal {
             revealInFinder(Self.newestRecording())
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { NSApp.terminate(nil) }
@@ -130,6 +135,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         session?.shutdown()
         control?.stop()
+    }
+
+    /// Force what the permission reads report, before anything asks them.
+    ///
+    /// `--debug-show setup` keeps its documented behaviour of defaulting an
+    /// unspecified row to `needed`, because that is the state every README example
+    /// and every stage-1 screenshot was taken in. Every other surface — the gate
+    /// especially — injects only what was asked for, so an unflagged run reads the
+    /// machine's real state and the invisible case is observable.
+    private func applyDebugInjections() {
+        let defaultsToNeeded = options.debugShow == "setup" && !options.debugLive
+        let screen = options.debugScreenStatus ?? (defaultsToNeeded ? .needed : nil)
+        let mic = options.debugMicStatus ?? (defaultsToNeeded ? .needed : nil)
+        guard screen != nil || mic != nil else { return }
+        Permissions.inject(screen: screen, microphone: mic)
     }
 
     // MARK: - Normal operation
@@ -154,6 +174,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         installStatusItem()
         startControlServer(session: session)
         note("ready — ⌥⌘R to record")
+
+        // Last, and only if something is missing. The hotkey, the status item and the
+        // control socket all come up first so a user who dismisses this window
+        // without fixing anything still has a working app to come back to — and so
+        // the window is never the reason the rest of the app didn't start.
+        showSetupIfIncomplete()
     }
 
     /// The external control surface. Failing to open it must not take the app
@@ -290,9 +316,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
+
+        // A section of its own, NOT grouped with Quit. macOS gives Quit a
+        // system-supplied glyph, and an icon on any item makes AppKit reserve an icon
+        // column for that whole section — so sharing Quit's group pushed this item
+        // right to align with Quit's *text* while filling nothing, and it read as
+        // accidentally indented next to every other row in the menu. (Seen; the menu
+        // dump reports `image=yes` on Quit and nothing else.) Its own section puts it
+        // back on the same left edge as "Record a Window…".
+        //
+        // It exists because a grant can be revoked at any time, months later, by
+        // someone who has long forgotten this window existed. Without a way back the
+        // app just quietly stops working — the exact failure this feature prevents,
+        // reintroduced one level up. Ellipsis: it opens a window that wants something.
+        let permissions = NSMenuItem(
+            title: "Permissions…", action: #selector(showSetupFromMenu), keyEquivalent: ""
+        )
+        permissions.target = self
+        // The menu turns off AppKit's automatic validation for the recents section,
+        // so enablement here has to be stated rather than assumed.
+        permissions.isEnabled = true
+        menu.addItem(permissions)
+
+        menu.addItem(.separator())
         menu.addItem(
             NSMenuItem(title: "Quit Stage Studio", action: #selector(NSApp.terminate(_:)), keyEquivalent: "q")
         )
+    }
+
+    /// Summoned on demand, so the window is reachable when everything is already
+    /// granted — the launch gate deliberately won't show it then.
+    @objc private func showSetupFromMenu() {
+        showSetup()
     }
 
     private func recentItem(for entry: RecentRecordings.Entry) -> NSMenuItem {
@@ -412,7 +467,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         task.arguments = ["-R\(region)", "-o", "-x", path]
         try? task.run()
         task.waitUntilExit()
-        note("captured \(path) (region \(region))")
+        Self.reportCapture(path, describedAs: "region \(region)")
+    }
+
+    /// Say what actually happened, not what was attempted.
+    ///
+    /// This used to print "captured <path>" unconditionally. `screencapture` writing
+    /// into a directory that doesn't exist fails silently, `try?` swallows the throw,
+    /// and the harness cheerfully reported a screenshot that was never written — a
+    /// verification tool minting a false fact about its own work, which is worse than
+    /// no tool. Caught exactly that way: a whole run's evidence didn't exist.
+    private nonisolated static func reportCapture(_ path: String, describedAs what: String) {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: path)
+        guard let bytes = attributes?[.size] as? Int, bytes > 0 else {
+            let message = "stage-studio: capture FAILED — nothing written to \(path)"
+                + " (\(what)). Does its directory exist?\n"
+            FileHandle.standardError.write(Data(message.utf8))
+            return
+        }
+        note("captured \(path) (\(what), \(bytes) bytes)")
     }
 
     /// The debug saved-pill points at a REAL file when one exists, so its click
@@ -449,7 +522,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             note("menu items:")
             for item in menu.items {
                 if item.isSeparatorItem { note("  ---"); continue }
-                note("  \(item.isEnabled ? "•" : "×") \(item.title)")
+                // indent/image/state are reported because they are what decides an
+                // item's left inset, and a row sitting at a different inset from its
+                // neighbours reads as a layout accident rather than a group.
+                note("  \(item.isEnabled ? "•" : "×") \(item.title)"
+                    + " [indent=\(item.indentationLevel)"
+                    + " image=\(item.image == nil ? "none" : "yes")"
+                    + " state=\(item.state.rawValue)"
+                    + " key=\(item.keyEquivalent.isEmpty ? "-" : item.keyEquivalent)]")
             }
         }
         armMenuCapture()
@@ -501,7 +581,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         task.arguments = ["-l\(id)", "-o", "-x", path]
         try? task.run()
         task.waitUntilExit()
-        note("captured \(path) (window \(id))")
+        reportCapture(path, describedAs: "window \(id)")
+    }
+
+    /// Fire the status-menu item whose title contains `needle` — the real NSMenuItem,
+    /// its real target and action. A menu entry is only worth as much as what happens
+    /// when it is clicked, and clicking one for real needs an Accessibility grant this
+    /// app deliberately doesn't have.
+    private func runDebugFireMenu(_ needle: String) {
+        installStatusItem()
+        guard let menu = statusItem?.menu else { exit(70) }
+        rebuildMenu(menu)
+        guard let item = menu.items.first(where: {
+            $0.title.localizedCaseInsensitiveContains(needle)
+        }) else {
+            let titles = menu.items.map(\.title).filter { !$0.isEmpty }
+            FileHandle.standardError.write(Data(
+                "stage-studio: no menu item matching \"\(needle)\" among \(titles)\n".utf8
+            ))
+            exit(2)
+        }
+        note("menu item: \"\(item.title)\" enabled=\(item.isEnabled)")
+        guard item.isEnabled, let action = item.action, let target = item.target else {
+            note("nothing wired to it — a click here does nothing")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { NSApp.terminate(nil) }
+            return
+        }
+        _ = target.perform(action, with: item)
+        // The action may well have put a window up; capture whatever it produced.
+        DispatchQueue.main.async { [self] in
+            note("window id: \(setup?.windowID.map(String.init) ?? "<none>")")
+            armCapture { self.setup?.captureRegion }
+        }
     }
 
     /// Click the Nth recent item the way AppKit would: a disabled item is
@@ -565,6 +676,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusPoll = nil
     }
 
+    /// The ONE place a setup window is built and wired.
+    ///
+    /// Both the real launch path and the debug harness come through here, so the
+    /// buttons in a screenshot are wired to the handlers the shipping app uses. A
+    /// debug surface that wires its own actions is a surface that can pass while the
+    /// product is broken — which is the same reason the debug states are injected
+    /// into `Permissions` rather than painted onto the model.
+    private func setupController() -> SetupController {
+        if let setup { return setup }
+        let setup = SetupController()
+        setup.onAction = { [weak self] kind, status in
+            note("action: \(kind.rawValue) (\(status.rawValue))")
+            self?.performSetupAction(kind, status)
+        }
+        setup.onClose = { [weak self] in self?.setupDidClose() }
+        self.setup = setup
+        return setup
+    }
+
+    /// Put the window up, seeded from whatever `Permissions` currently reports and
+    /// tracking it from then on.
+    private func showSetup() {
+        let setup = setupController()
+        // The window can be summoned again from the status menu after being
+        // dismissed, so the once-only latch resets on the way in.
+        setupDismissed = false
+        setup.model.screenRecording = Permissions.screenRecording
+        setup.model.microphone = Permissions.microphone
+        setup.show()
+        startStatusPolling()
+        // Checked HERE because this is the only moment it could plausibly break: this
+        // window is the one surface in the app that deliberately activates and takes
+        // focus, and an app that quietly became .regular grows a Dock icon and a menu
+        // bar it is not supposed to have. The invisibility is the product.
+        let policy = NSApp.activationPolicy()
+        note(policy == .accessory
+            ? "activation policy: accessory (no Dock icon) — as it must be"
+            : "activation policy: \(policy.rawValue) — NOT accessory, LSUIElement has regressed")
+    }
+
+    /// The launch gate: appear only when something is actually missing.
+    ///
+    /// A correctly configured user must see NOTHING — this app is `LSUIElement` and
+    /// that invisibility is the product, not a side effect. Factored so the harness
+    /// exercises this exact decision rather than a paraphrase of it.
+    @discardableResult
+    private func showSetupIfIncomplete() -> Bool {
+        let screen = Permissions.screenRecording
+        let mic = Permissions.microphone
+        guard !(screen == .granted && mic == .granted) else {
+            note("gate: screen=\(screen.rawValue), mic=\(mic.rawValue) — complete, staying invisible")
+            return false
+        }
+        note("gate: screen=\(screen.rawValue), mic=\(mic.rawValue) — incomplete, showing setup")
+        showSetup()
+        return true
+    }
+
+    /// Dismissal, from Done, the close box, or Esc — and it can arrive twice on the
+    /// way out, hence the latch.
+    private func setupDidClose() {
+        guard !setupDismissed else { return }
+        setupDismissed = true
+        stopStatusPolling()
+        note("setup dismissed")
+        // A debug run exists to show one surface, so dismissing it ends the run. In
+        // normal operation the app simply goes back to being invisible.
+        if options.debugShow != nil {
+            DispatchQueue.main.async { NSApp.terminate(nil) }
+        }
+    }
+
     /// One state, one action. The window knows nothing about any of this; it just
     /// reports which row was pressed and what state that row was in.
     private func performSetupAction(_ kind: PermissionKind, _ status: PermissionStatus) {
@@ -625,37 +808,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// relaunches for real, and the window then re-reads the live state, which will
     /// replace any injected value. That is the point; a stub button proves nothing.
     private func runDebugSetup() {
-        let setup = SetupController()
-        self.setup = setup
-        // The flags decide the STARTING state and `--debug-live` decides whether the
-        // window then tracks reality. Composable on purpose: injecting a state the
-        // machine isn't in and letting the poll correct it is the only way to prove
-        // the poll fires at all — a timer that silently never runs looks exactly like
-        // a machine whose permissions didn't change.
-        let liveScreen = options.debugLive ? Permissions.screenRecording : .needed
-        let liveMic = options.debugLive ? Permissions.microphone : .needed
-        setup.model.screenRecording = options.debugScreenStatus ?? liveScreen
-        setup.model.microphone = options.debugMicStatus ?? liveMic
-        if options.debugLive { startStatusPolling() }
-        setup.onAction = { [weak self] kind, status in
-            note("action tapped: \(kind.rawValue) (\(status.rawValue))")
-            self?.performSetupAction(kind, status)
-        }
-        setup.onClose = { [weak self] in
-            guard let self, !self.setupDismissed else { return }
-            self.setupDismissed = true
-            self.stopStatusPolling()
-            note("setup dismissed")
-            DispatchQueue.main.async { NSApp.terminate(nil) }
-        }
-        setup.show()
+        showSetup()
+        guard let setup else { return }
         DispatchQueue.main.async { [self] in
             note("screen: \(setup.model.screenRecording.rawValue), mic: \(setup.model.microphone.rawValue)")
             note("window id: \(setup.windowID.map(String.init) ?? "<unavailable>")")
             note("showing setup — Esc or the close button to dismiss")
+            // From here the poll reads reality, so a forced starting state can be
+            // corrected in front of us. A timer that silently never fires looks
+            // exactly like a machine whose permissions didn't change, and this is
+            // the only way to tell those apart on a fully-granted machine.
+            if options.debugLive { Permissions.clearInjections() }
             if let kind = options.debugSetupAction {
                 fireSetupAction(kind, on: setup)
             }
+            armCapture { setup.captureRegion }
+        }
+    }
+
+    /// The launch gate itself, run in isolation and then torn down.
+    ///
+    /// Deliberately NOT a full `startSession()`: that registers the global hotkey,
+    /// binds the control socket and installs a status item, all of which this clone
+    /// shares a bundle id with an installed copy over — so a debug run of it would
+    /// contend with the app the user actually depends on, and would never exit. This
+    /// calls the same `showSetupIfIncomplete()` the real launch calls, and nothing
+    /// else.
+    private func runDebugGate() {
+        let shown = showSetupIfIncomplete()
+        guard shown, let setup else {
+            note("gate showed nothing — quitting, which is exactly the invisible case")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { NSApp.terminate(nil) }
+            return
+        }
+        DispatchQueue.main.async { [self] in
+            note("window id: \(setup.windowID.map(String.init) ?? "<unavailable>")")
             armCapture { setup.captureRegion }
         }
     }
@@ -708,6 +895,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
 
+        if surface == "gate" {
+            runDebugGate()
+            return
+        }
+
         if surface == "picker" {
             let picker = PickerController()
             self.picker = picker
@@ -750,7 +942,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             pill.show(.saved(url: Self.newestRecording(), duration: 42))
         default:
             FileHandle.standardError.write(Data(
-                "stage-studio: unknown --debug-show \(surface). Try: menu, picker, setup, pill-countdown, pill-recording, pill-saved\n".utf8
+                "stage-studio: unknown --debug-show \(surface). Try: menu, picker, setup, gate, pill-countdown, pill-recording, pill-saved\n".utf8
             ))
             exit(64)
         }
