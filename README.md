@@ -46,8 +46,8 @@ You need:
 Then:
 
 ```bash
-git clone https://github.com/<owner>/stage-studio.git
-cd stage-studio
+git clone https://github.com/thebrubaker/windowclip.git
+cd windowclip
 bun install
 pnpm run build      # compiles the three Swift binaries
 ```
@@ -480,7 +480,7 @@ This repo contains the trajectory of a few earlier attempts, kept as reference:
 ## Repo layout
 
 ```
-stage-studio/
+windowclip/
 ├── .claude/skills/windowclip/ Claude skill for the chat-driven flow
 ├── app/                       Hotkey recorder — LSUIElement agent app (Swift)
 │   ├── Sources/               main, AppDelegate, picker, pill, session, hotkeys,
